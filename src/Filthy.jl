@@ -45,9 +45,9 @@ struct CovarianceFilter{P<:KFParms, S<:KFStates, I<:KFInitVal, C<:KFCache, F<:Ba
     t::N    
 end
 
-function CovarianceFilter(Z::A, H::A, T::A, R::A, Q::A, a0::AZ, P0::PZ) where {A, AZ, PZ}
+function CovarianceFilter(Z::A, H::A, T::A, R::B, Q::A, a0::AZ, P0::PZ) where {A, B, AZ, PZ}
     #checksizes(Z, H, T, R, Q, α0, P0)
-    m = numstates(Z)
+    m = numstates(Z)::Int64
     att = GrowableArray(a0)
     Ptt = GrowableArray(P0)
     params = KFParms(Z, H, T, R, Q)
@@ -73,10 +73,10 @@ function Base.filter!(cf::CovarianceFilter, y::Vector{Float64})
     L = T-K*Z
     att = T*a + K*v
     Ptt = T*P*L' + R*Q*R'
-
-    push!(cf.s.att, convert(Vector{Float64}, att))
-    push!(cf.s.Ptt, convert(Matrix{Float64}, Ptt))
-    cf.loglik[] += - p/2*log(2π) - 0.5*logdet(F)+v'*invF*v
+    push!(cf.s.att, att)
+    push!(cf.s.Ptt, Ptt)
+    s = 0.5*logdet(F)+v'*invF*v
+    cf.loglik[] += - p/2*log(2π) - s[1]
     cf.t[] += 1
 end
 
@@ -94,7 +94,6 @@ function Base.filter!(cf::CovarianceFilter{KFP} where KFP<:KFParms{A}, y::Float6
     L = T-K*Z
     att = T*a + K*v
     Ptt = T*P*L + R*Q*R
-
     push!(cf.s.att, att)
     push!(cf.s.Ptt, Ptt)
     cf.loglik[] += - p/2*log(2π) - 0.5*abs(F)+v*v/F
