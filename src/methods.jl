@@ -1,4 +1,4 @@
-function currentstate(cf::CovarianceFilter) 
+@noinline function currentstate(cf::CovarianceFilter) 
     idx = cf.t[]::Int
     (cf.s.att[idx], cf.s.Ptt[idx])
 end
@@ -9,7 +9,7 @@ numstates(a::AbstractFloat) = 1
 Base.size(cf::CovarianceFilter) = size(cf.p)
 
 Base.size(p::KFParms{P}) where P<:AbstractFloat = (1,1,1)
-Base.size(p::KFParms{P}) where P<:AbstractArray = (size(p.Z)..., size(p.R, 1))
+Base.size(p::KFParms{P}) where P<:AbstractArray = (size(p.Z)..., size(p.Q, 1))
 
 
 
