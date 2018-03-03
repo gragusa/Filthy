@@ -1,4 +1,4 @@
-using Filthy
+using Revise,Filthy
 using Base.Test
 using StaticArrays
 using BenchmarkTools
@@ -89,39 +89,43 @@ end
 @test all(cf_static.s.att[:,1] .≈ cf_matrix.s.att[:,1])
 
 
+using Plots
+gr()
+Plots.plot(1:length(nile), cf_static.f.a[2:end,1], color = :darkblue)
+plot!(nile, color = :black)
+plot!(cf_static.s.a, color = :red)
+# plot!(cf.s.att[2:end,1]-1.64*sqrt.(cf.s.Ptt[2:end,1]), color = :darkblue, linestyle = :dot)
+# plot!(cf.s.att[2:end,1]+1.64*sqrt.(cf.s.Ptt[2:end,1]), color = :darkblue, linestyle = :dot)
+
+
+
 
 p = 2
 m = 2
 r = 2
 
+Zp = @SMatrix eye(p,p)
+Hp = @SMatrix eye(p,p)
+Tp = SMatrix{m,m}([0.92 0.2; -.2 -0.9])
+Rp = I
+Qp = SMatrix{m,m}(eye(m))
 
 
-Z = @SMatrix eye(p,p)
-H = @SMatrix eye(p,p)
-
-
-T = SMatrix{m,m}([0.92 0.2; -.2 -0.9])
-R = I
-Q = SMatrix{m,m}(eye(m))
-
-
-
-
-cf = CovarianceFilter(Z, H, T, R, Q, SVector{2}(zeros(2)), SMatrix{2,2}(eye(2)))
+cf = CovarianceFilter(Zp, Hp, Tp, Rp, Qp, SVector{2}(zeros(2)), SMatrix{2,2}(eye(2)))
 
 srand(12234)
 Y, a = simulate(cf, 200)
 
 #writecsv("Y.csv", Y')
 
-cf = CovarianceFilter(Z, H, T, R, Q, SVector{2}(zeros(2)), SMatrix{2,2}(eye(2)))
-    for i in 1:200
-        filter!(cf, Y[:, i])
-    end
+cf = CovarianceFilter(Zp, Hp, Tp, Rp, Qp, SVector{2}(zeros(2)), SMatrix{2,2}(eye(2)))
+for i in 1:200
+    filter!(cf, Y[:, i])
 end
 
-@test convert(Vector,  cf.s.att[10]) .≈ [0.46446643122638098244; 2.13857431622820914896]
-@test convert(Vector, cf.s.att[100]) .≈ [1.20622036437758350935; -0.39600752142009676415]
+
+@test all(convert(Vector,  cf.s.att[10]) .≈ [0.46446643122638098244; 2.13857431622820914896])
+@test all(convert(Vector, cf.s.att[100]) .≈ [1.20622036437758350935; -0.39600752142009676415])
 
 tt = @btime begin
 cf = CovarianceFilter(Z, H, T, R, Q, SVector{2}(zeros(2)), SMatrix{2,2}(eye(2)))
@@ -138,6 +142,10 @@ end
 # gr()
 # p1 = Plots.plot(1:size(Y,2), cf.s.att[2:end,1], color = :darkblue)
 # p2 = Plots.plot(1:size(Y,2), cf.s.att[2:end,2], color = :darkblue)
+
+p1 = Plots.plot(1:size(Y,2), cf.f.a[2:end,1], color = :darkblue)
+p2 = Plots.plot(1:size(Y,2), cf.f.a[2:end,2], color = :darkblue)
+
 # plot!(p1, a[1,:])
 # plot!(p2, a[2,:])
 # plot!(nile, color = :black)
