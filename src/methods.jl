@@ -1,10 +1,14 @@
 @noinline function currentstate(cf::CovarianceFilter) 
     idx = cf.t[]::Int
-    (cf.s.att[idx], cf.s.Ptt[idx])
+    (cf.f.a[idx], cf.f.P[idx])
 end
 
 numstates(a::AbstractArray) = size(a,1)
 numstates(a::AbstractFloat) = 1
+
+nummeasur(a::AbstractArray) = size(a,1)
+nummeasur(a::AbstractFloat) = 1
+
 
 Base.size(cf::CovarianceFilter) = size(cf.p)
 

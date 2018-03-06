@@ -60,23 +60,37 @@ Rs = SMatrix{1,1}(Rn)
 Ts = SMatrix{1,1}(Tn)
 Qs = SMatrix{1,1}(Qn)
 
-cf_scalar = Filthy.CovarianceFilter(1.0, 15099., 1.0, 1.0, 1469.1, 0.0, 10.^7.)
+cf_scalar = CovarianceFilter(1.0, 15099., 1.0, 1.0, 1469.1, 0.0, 10.^7.)
 cf_matrix = Filthy.CovarianceFilter(Zn, Hn, Tn, Rn, Qn, [0.0], fill(10.^7., (1,1)))
 cf_static = Filthy.CovarianceFilter(Zs, Hs, Ts, Rs, Qs, SMatrix{1,1}([0.0]), SMatrix{1,1}(fill(10.^7., (1,1))))
 
-@btime begin 
+scalar_vec = @btime begin 
+    cf_scalar = Filthy.CovarianceFilter(1.0, 15099., 1.0, 1.0, 1469.1, 0.0, 10.^7.)
+    filter!(cf_scalar, vec(nile))
+end
+
+scalar_online = @btime begin 
     cf_scalar = Filthy.CovarianceFilter(1.0, 15099., 1.0, 1.0, 1469.1, 0.0, 10.^7.)
     for j in eachindex(nile)
         filter!(cf_scalar, nile[j])
     end
 end
 
-@btime begin 
+
+
+
+stat_online = @btime begin 
     cf_static = Filthy.CovarianceFilter(Zs, Hs, Ts, Rs, Qs, SMatrix{1,1}([0.0]), SMatrix{1,1}(fill(10.^7., (1,1))))
     for j in eachindex(nile)
         filter!(cf_static, [nile[j]])
     end
 end
+
+stat_vec = @btime begin 
+    cf_static = Filthy.CovarianceFilter(Zs, Hs, Ts, Rs, Qs, SMatrix{1,1}([0.0]), SMatrix{1,1}(fill(10.^7., (1,1))))    
+    filter!(cf_static, nile)    
+end
+
 
 @btime begin 
     cf_matrix = Filthy.CovarianceFilter(Zn, Hn, Tn, Rn, Qn, [0.0], fill(10.^7., (1,1)))
@@ -116,7 +130,7 @@ cf = CovarianceFilter(Zp, Hp, Tp, Rp, Qp, SVector{2}(zeros(2)), SMatrix{2,2}(eye
 srand(12234)
 Y, a = simulate(cf, 200)
 
-#writecsv("Y.csv", Y')
+writecsv("Y.csv", Y')
 
 cf = CovarianceFilter(Zp, Hp, Tp, Rp, Qp, SVector{2}(zeros(2)), SMatrix{2,2}(eye(2)))
 for i in 1:200
@@ -124,16 +138,26 @@ for i in 1:200
 end
 
 
-@test all(convert(Vector,  cf.s.att[10]) .≈ [0.46446643122638098244; 2.13857431622820914896])
-@test all(convert(Vector, cf.s.att[100]) .≈ [1.20622036437758350935; -0.39600752142009676415])
+@test all(convert(Vector, cf.f.a[10]) .≈ [0.46446643122638098244; 2.13857431622820914896])
+@test all(convert(Vector, cf.f.a[100]) .≈ [1.20622036437758350935; -0.39600752142009676415])
+
+cf = CovarianceFilter(Zp, Hp, Tp, Rp, Qp, SVector{2}(zeros(2)), SMatrix{2,2}(eye(2)))
+filter!(cf, Y')
+@test all(convert(Vector, cf.f.a[10]) .≈ [0.46446643122638098244; 2.13857431622820914896])
+@test all(convert(Vector, cf.f.a[100]) .≈ [1.20622036437758350935; -0.39600752142009676415])
+
 
 tt = @btime begin
-cf = CovarianceFilter(Z, H, T, R, Q, SVector{2}(zeros(2)), SMatrix{2,2}(eye(2)))
-    for i in 1:200
+    cf = CovarianceFilter(Zp, Hp, Tp, Rp, Qp, SVector{2}(zeros(2)), SMatrix{2,2}(eye(2)))
+    for i in 1:size(Y,2)
         filter!(cf, Y[:, i])
     end
 end
 
+vv = @btime begin
+    cf = CovarianceFilter(Zp, Hp, Tp, Rp, Qp, SVector{2}(zeros(2)), SMatrix{2,2}(eye(2)))
+    filter!(cf, Y')    
+end
 
 
 
