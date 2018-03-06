@@ -231,14 +231,6 @@ end
 
 loglik(cf) = cf.loglik[]::Float64
 
-fitss(cf, )
-
-
-
-
-
-
-
 
 include("methods.jl")
 
