@@ -118,14 +118,15 @@ p = 2
 m = 2
 r = 2
 
-Zp = @SMatrix eye(p,p)
-Hp = @SMatrix eye(p,p)
-Tp = SMatrix{m,m}([0.92 0.2; -.2 -0.9])
-Rp = I
-Qp = SMatrix{m,m}(eye(m))
-
-
-cf = CovarianceFilter(Zp, Hp, Tp, Rp, Qp, SVector{2}(zeros(2)), SMatrix{2,2}(eye(2)))
+Z = @SMatrix eye(p,p)
+H = @SMatrix eye(p,p)
+T = SMatrix{m,m}([0.92 0.2; -.2 -0.9])
+R = I
+Q = SMatrix{m,m}(eye(m))
+a1 = SVector{2}(zeros(2))
+P1 = SMatrix{2,2}(eye(2))
+Pinf = SMatrix{2,2}(eye(2))
+cf = LinearStateSpace(Z, H, T, R, Q, a1, P1, Pinf = Pinf)
 
 srand(12234)
 Y, a = simulate(cf, 200)
@@ -145,7 +146,6 @@ cf = CovarianceFilter(Zp, Hp, Tp, Rp, Qp, SVector{2}(zeros(2)), SMatrix{2,2}(eye
 filter!(cf, Y')
 @test all(convert(Vector, cf.f.a[10]) .≈ [0.46446643122638098244; 2.13857431622820914896])
 @test all(convert(Vector, cf.f.a[100]) .≈ [1.20622036437758350935; -0.39600752142009676415])
-
 
 tt = @btime begin
     cf = CovarianceFilter(Zp, Hp, Tp, Rp, Qp, SVector{2}(zeros(2)), SMatrix{2,2}(eye(2)))

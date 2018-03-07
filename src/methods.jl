@@ -1,7 +1,9 @@
-@noinline function currentstate(cf::CovarianceFilter) 
+@noinline function currentstate(cf::LinearStateSpace) 
     idx = cf.t[]::Int
-    (cf.f.a[idx], cf.f.P[idx])
+    (cf.f.a[idx], cf.f.P[idx], cf.f.Pinf[idx], cf.f.Pstar[idx])
 end
+
+isexactfilter(Pinf) = any(Pinf.data.!=0)
 
 numstates(a::AbstractArray) = size(a,1)
 numstates(a::AbstractFloat) = 1
@@ -10,7 +12,7 @@ nummeasur(a::AbstractArray) = size(a,1)
 nummeasur(a::AbstractFloat) = 1
 
 
-Base.size(cf::CovarianceFilter) = size(cf.p)
+Base.size(cf::LinearStateSpace) = size(cf.p)
 
 Base.size(p::KFParms{P}) where P<:AbstractFloat = (1,1,1)
 Base.size(p::KFParms{P}) where P<:AbstractArray = (size(p.Z)..., size(p.Q, 1))
