@@ -148,14 +148,14 @@ end
 Vectorized version
 =#
 
-ss_scalar_vec = LinearStateSpace(1.0, 15099.82, 1.0, 1.0, 1468.487, 0.0, 10.^7.)
-Filthy.filter!(ss_scalar_vec, vec(nile))
+ss_scalar = LinearStateSpace(1.0, 15099.82, 1.0, 1.0, 1468.487, 0.0, 10.^7.)
+Filthy.filter!(ss_scalar, vec(nile))
 
-ss_matrix_vec = LinearStateSpace(Zn, Hn, Tn, Rn, Qn, [0.0], fill(10.^7., (1,1)))
-Filthy.filter!(ss_matrix_vec, nile')
+ss_matrix = LinearStateSpace(Zn, Hn, Tn, Rn, Qn, [0.0], fill(10.^7., (1,1)))
+Filthy.filter!(ss_matrix, nile')
 
-ss_static_vec = LinearStateSpace(Zs, Hs, Ts, Rs, Qs, SVector{1}(0.0), SMatrix{1,1}(fill(10.^7., (1,1))))
-Filthy.filter!(ss_static_vec, nile')
+ss_static = LinearStateSpace(Zs, Hs, Ts, Rs, Qs, SVector{1}(0.0), SMatrix{1,1}(fill(10.^7., (1,1))))
+Filthy.filter!(ss_static, nile')
 
 @testset "Filter correctness (offline) [inexact]..." begin
     @test ss_scalar_vec.f.a[1] == ss_scalar.f.a[1]
