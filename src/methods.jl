@@ -22,8 +22,7 @@ function updatelik!(ss, v, F, F⁻¹, ispd)
     ss.loglik[1] += -p/2*log(2π) - first(s)
 end
 
-function updatelik!(ss, v, F, F⁻¹) 
-    @show ss.t[]
+function updatelik!(ss, v, F, F⁻¹)     
     p, m, r = size(ss)
     s = 0.5*(logdet(F) + v'F⁻¹*v)
     ss.loglik[1] += -p/2*log(2π) - first(s)
@@ -52,11 +51,14 @@ testposdef(x::AbstractArray) = isposdef(x)
 testposdef(x::StaticMatrix) = all(map(u-> u[1]>0, eig(x)))
 
 function safeinverse(x)
-        try
+        out = try
             (true, inv(x))
-        catch 
+        catch mesg
+            println(mesg)
             (false, x)
         end
+        out
+        
 end
 
 toarray(b) = b

@@ -18,12 +18,12 @@ mutable struct KFFiltered{AT, PT, PI}
     Pstar::PI
     Pinf::PI
     d::Array{Int,1}
-    isinitdiffuse::Bool
+    isFsingular::BitArray{1}
     hasdiffended::BitArray{1}
 end
 
 function KFFiltered(a, P, Pinf::Void, Q::Union{AbstractArray, AbstractFloat})
-    KFFiltered(a, P, P, P, [1], false, BitArray([1]))
+    KFFiltered(a, P, P, P, [1], BitArray{1}([0]), BitArray([1]))
 end
 
 function KFFiltered(a, P, Pinf::AbstractMatrix, Q::AbstractMatrix)
@@ -34,9 +34,8 @@ function KFFiltered(a, P, Pinf::AbstractMatrix, Q::AbstractMatrix)
     R₀[find(Pinf_.==1)] = 0.0
     R₀ = convert(typeof(Pinf), R₀)
     Pstar = GrowableArray(R₀*R₀')
-    Pinf′ = GrowableArray(Pinf_)
-    isdiff = isdiffuse(Pinf_)
-    KFFiltered(a, P, Pstar, Pinf′, [1], isdiff,  BitArray([0]))
+    Pinf′ = GrowableArray(Pinf_)    
+    KFFiltered(a, P, Pstar, Pinf′, [1], BitArray([0]),  BitArray([0]))
 end
 
 function KFFiltered(a, P, Pinf::AbstractFloat, Q::AbstractFloat)
@@ -44,8 +43,8 @@ function KFFiltered(a, P, Pinf::AbstractFloat, Q::AbstractFloat)
     @assert Pinf > 0 "Initial value to diffuse part should be > 0"    
     Pstar = GrowableArray(0.0)
     Pinf′ = GrowableArray(Pinf)
-    isdiff = isdiffuse(Pinf)
-    KFFiltered(a, P, Pstar, Pinf′, [1], isdiff,  BitArray([0]))
+    #isdiff = isdiffuse(Pinf)
+    KFFiltered(a, P, Pstar, Pinf′, [1], BitArray(1),  BitArray([0]))
 end
 
 mutable struct KFSmoothed{AT, PT}
@@ -147,7 +146,7 @@ function Base.filter!(ss::LinearStateSpace{KFP} where KFP<:KFParms{A}, Y::Matrix
     end
 end
 
-function storepush!(ss, a, P, v, F, F⁻¹, Pinf, Pstar, y)
+function storepush!(ss, a, P, v, F, F⁻¹, Pinf, Pstar, y, ispd)
     # @show a
     # @show P
     # @show F⁻¹
@@ -162,10 +161,8 @@ function storepush!(ss, a, P, v, F, F⁻¹, Pinf, Pstar, y)
     push!(ss.c.Y, y)
     push!(ss.f.Pinf, Pinf)
     push!(ss.f.Pstar, Pstar)
-    # s = loglikpart(v, F, F⁻¹)
-    # p, _ = size(ss.p)
-    # ss.loglik[1] += - p/2*log(2π) - s
     ss.f.d[1] += 1
+    push!(ss.f.isFsingular, !ispd)
     nothing
 end
 
@@ -180,13 +177,10 @@ function storepush!(ss, a, P, v, F, F⁻¹, y)
     push!(ss.c.F⁻¹, F⁻¹)
     push!(ss.c.F, F)
     push!(ss.c.Y, y)
-    # s = loglikpart(v, F, F⁻¹)
-    # p, _ = size(ss.p)
-    # ss.loglik[1] += - p/2*log(2π) - s
     nothing
 end
 
-function storeset!(ss, a, P, v, F, F⁻¹, Pinf, Pstar, y, offset)
+function storeset!(ss, a, P, v, F, F⁻¹, Pinf, Pstar, y, offset, ispd)
     idx = ss.t[] + offset
     ss.f.a[idx]    = a
     ss.f.P[idx]    = P
@@ -195,10 +189,8 @@ function storeset!(ss, a, P, v, F, F⁻¹, Pinf, Pstar, y, offset)
     ss.c.Y[idx]    = y
     push!(ss.f.Pinf, Pinf)
     push!(ss.f.Pstar, Pstar)
-    # s = loglikpart(v, F, F⁻¹)
-    # p, _ = size(ss.p)
-    # ss.loglik[1] += - p/2*log(2π) - s
     ss.f.d[1] += 1
+    push!(ss.f.isFsingular, !ispd)
     nothing
 end
 
@@ -227,8 +219,8 @@ function onlinefilterstep!(ss::LinearStateSpace, y, v::Type{Val{true}})
     a, P, Pinf, Pstar = currentstate(ss, Val{true})
     @unpack Z, H, T, R, Q = ss.p
     a′, P′, v, F, F⁻¹, Pinf′, Pstar′, ispd = filterstep(a, P, Pinf, Pstar, Z, H, T, R, Q, y)    
-    ss.f.hasdiffended[1] = norm(Pinf′) <= 1e-06
-    storepush!(ss, a′, P′, v, F, F⁻¹, Pinf′, Pstar′, y)                
+    ss.f.hasdiffended[1] = norm(Pinf′) <= 1e-08
+    storepush!(ss, a′, P′, v, F, F⁻¹, Pinf′, Pstar′, y, ispd)                
 end
 
 function onlinefilterstep_set!(ss::LinearStateSpace, y, offset, v::Type{Val{false}})
@@ -244,7 +236,7 @@ function onlinefilterstep_set!(ss::LinearStateSpace, y, offset, v::Type{Val{true
     @unpack Z, H, T, R, Q = ss.p
     a′, P′, v, F, F⁻¹, Pinf′, Pstar′, ispd = filterstep(a, P, Pinf, Pstar, Z, H, T, R, Q, y)    
     ss.f.hasdiffended[1] = norm(Pinf′) <= 1e-06
-    storeset!(ss, a′, P′, v, F, F⁻¹, Pinf′, Pstar′, y, offset)
+    storeset!(ss, a′, P′, v, F, F⁻¹, Pinf′, Pstar′, y, offset, ispd)
     updatelik!(ss, v, F, F⁻¹, ispd)
 end
 
@@ -277,6 +269,9 @@ function diffusefilterstep(a, P, Pinf, Pstar, Finf, Finfinv, Z, H, T, R, Q, y, :
     Pinf′  = T*Pinf*Linf' 
     Pstar′ = T*Pstar*Linf' + Kinf*Finf*Kstar' + R*Q*R
     P′     = Pstar′
+    @show Finfinv
+    @show Pstar′
+    @show Pinf′    
     (a′, P′, v, Finf, Finfinv, Pinf′, Pstar′, true)
 end
 
@@ -291,155 +286,187 @@ function diffusefilterstep(a, P, Pinf, Pstar, Finf, Finfinv, Z, H, T, R, Q, y, :
     Pinf′  = T*Pinf*T' 
     Pstar′ = T*Pstar*Lstar' + R*Q*R
     P′     = Pstar′
+    @show Pstar′
+    @show Pinf′
     (a′, P′, v, Fstar, Fstarinv, Pinf′, Pstar′, false)
+end
+
+function smooth!(ss::LinearStateSpace)
+    n = ss.t[]::Int64
+    p, m, r = size(ss.p)
+    @assert n > 1 "There is not data to smooth over"
+    @unpack Z, H, T, R, Q = ss.p  
+    â  = Array{Float64}(m, n)
+    V  = Array{Float64}(m, m, n)
+    r  = Array{Float64}(p, n)
+    N  = Array{Float64}(p, p, n)
+
+    F⁻¹ = ss.c.F⁻¹
+    Y  = ss.c.Y
+    a  = ss.f.a
+    P  = ss.f.P
+    d  = ss.f.d[1]
+    r[:, n] = 0.0
+    N[:, :, n] = 0.0
+    
+    @inbounds for t in n:-1:d+1 #(d+1)
+        ## Hoisting
+        Finv = F⁻¹[t]
+        PP = P[t-1]
+        v = Y[t] .- Z*a[t-1]
+        L = T .- T*P[t-1]*Z'*Finv*Z
+        r[:, t-1] = Z'*Finv*v .+ L'*r[:, t]
+        â[:, t] = a[t-1] .+ PP*r[:,t-1]
+        N[:, :, t-1] = reshape(convert(Matrix, Z'*Finv*Z + L'*N[:,:,t]*L), (p, p, 1))
+        V[:, :, t] = reshape(convert(Matrix, P[t-1] .- P[t-1]*N[:, :, t-1]*P[t-1]), (p, p, 1))
+    end
+
+    if d>=1
+        rdz = Array{Float64}(p, d)
+        rdo = Array{Float64}(p, d)
+        Ndz = Array{Float64}(p, p, d)
+        Ndo = Array{Float64}(p, p, d)
+        Ndt = Array{Float64}(p, p, d)
+        rdz[:, d] = r[:, d]
+        rdo[:, d] = 0.0
+        Ndz[:, :, d] = N[:, :, d]
+        Ndo[:, :, d] = 0.0
+        Ndt[:, :, d] = 0.0
+    end    
+
+    ## Diffuse step
+    for t in d:-1:2
+        Pinf = ss.f.Pinf[t-1]
+        Pstar = ss.f.Pstar[t]
+        v = Y[t] .-Z*a[t-1]
+        if !ss.f.isFsingular[t]
+            Finf = Z*Pinf*Z'
+            Finfinv = inv(Finf)
+            Kinf = T*Pinf*Z*Finfinv
+            Linf = T - Kinf*Z
+            Fstar = Z*Pstar*Z' + H
+            Kstar = (T*Pstar*Z' - Kinf*Fstar)*Finfinv
+            F♯ = Kstar'Ndz[:,:,t]*Kstar - Finfinv*Fstar*Finfinv
+            rdz[:,t-1] = Linf'rdz[:, t]
+            rdo[:,t-1] = Z'*(Finfinv*v - Kstar'rdz[:,t]) + Linf'*rdo[:,t]
+            Ndz[:,:,t-1] = Linf'*Ndz[:,:,t]*Linf
+            A = Linf'Ndz[:,:,t]*Kstar*Z
+            Ndo[:,:,t-1] = Z'Finfinv*Z + Linf'*Ndo[:, :, t]*Linf - A - A'
+            A = Linf'Ndo[:,:,t]*Kstar*Z
+            Ndt[:,:,t-1] = Z'*F♯*Z + Linf'*Ndt[:,:,t]*Linf - A - A'
+            â[:,t] = a[t-1] .+ Pstar*rdz[:,t-1] .+ Pinf*rdo[:,t-1]
+            A = Pinf*Ndo[:,:,t-1]*Pstar
+            B = Pinf*Ndt[:,:,t-1]*Pinf
+            V[:,:,t] = Pstar - Pstar*Ndz[:,:,t-1]*Pstar - (A + A') - B 
+        else
+            Fstar = Z'*Pstar*Z + H
+            Fstarinv = inv(Fstar)
+            Lstar = T - Kstar*Z
+            Kstar = T*Pstar*Z'*Fstarinv
+            rdz[:,t-1] = Z'Fstarinv*v - Lstar'rdz[:, t]
+            rdo[:,t-1] = T'rdo[:,t]
+            Ndz[:,:,t-1] = Z'*Fstarinv*Z + Lstar'Ndz[:,:,t]*Lstar            
+            Ndo[:,:,t-1] = T'Ndo[:,:,t]*Lstar
+            Ndt[:,:,t-1] = T*Ndt[:,:,t]*T
+            â[:,t-1] = a[t] .+ Pstar*rdz[:,t] .+ Pinf*rdz[:,t-1]
+            V[:,:,t] = Pstar - Pstar*Ndz[:,:,t-1] 
+        end
+    end
+    ss.s.r = r[:, 1:n-1]'
+    ss.s.a = â'[2:end, :]
+    ss.s.V = V[:, :, 2:end]
+    ss.s.N = N[:, :, 1:n-1]
 end
 
 
 
 
 
+function fastsmooth!(ss::LinearStateSpace)
+    n = ss.t[]::Int64
+    p, m, r = size(ss.p)
+    @assert n > 1 "There is not data to smooth over"
+    @unpack Z, H, T, R, Q = ss.p  
+    F⁻¹ = ss.c.F⁻¹
+    Y  = ss.c.Y
+    a  = ss.f.a
+    P  = ss.f.P
+    # â  = Array{Float64}(m, n)
+    # V  = Array{Float64}(m, m, n)
+    â = Array{NTuple{m, Float64}}(n)
+    V = Array{NTuple{m^2, Float64}}(n)
+    r = zeros(p)
+    N = zeros(p, p)
+    r′ = zeros(p)
+    N′ = zeros(p, p)
+    v = Array{Float64}(p)
+    L = Array{Float64}(m,m)
+    d  = ss.f.d[1]
 
-
-
-
-
-# """
-# filter!(cf::LinearStateSpace, y::Vector{Float64})
-# On-line covariance filter. 
-# """
-# function Base.filter!(cf::LinearStateSpace, y::Vector{Float64})    
-#     p, m, r = size(cf.p)
-#     a, P, Pinf, Pstar = currentstate(cf)
-#     @unpack Z, H, T, R, Q = cf.p
-#     exact = isexactfilter(Pinf)::Bool
-#     a′, P′, v, F, F⁻¹, Pstar′, Pinf′, d = filterstep(a, P, Pstar, Pinf, Z, H, T, R, Q, y, Val{exact})
-#     push!(cf.f.a, a′)
-#     push!(cf.f.P, P′)
-#     push!(cf.c.F⁻¹, F⁻¹)
-#     push!(cf.c.F, F)
-#     if cf.i.d == cf.t[]
-#         push!(cf.f.Pinf, Pstar′)
-#         push!(cf.f.Pstar, Pinf′)
-#     end
-#     push!(cf.c.Y, y)
-#     s = 0.5*logdet(F)+v'*F⁻¹*v
-#     cf.loglik[1] += - p/2*log(2π) - s[1]
-#     cf.t[] += 1
-# end
-
-# function Base.filter!(cf::LinearStateSpace{KFP} where KFP<:KFParms{A}, Y::Matrix{Float64}) where A<:AbstractArray
-#     TT, PP = size(Y)
-#     p, m, r = size(cf.p)
-#     offset = cf.t[]
-#     @assert p==PP "Inconsistent dimension. Y must be (Tx$p)."
-#     ## Check whether the last element of cf.f.a is not undef
-#     @assert isassigned(cf.f.a, length(cf.f.a))
-#     @assert isassigned(cf.f.P, length(cf.f.P))
+    if d>2
+        rdz = Array{Float64}(p, d)
+        rdo = Array{Float64}(p, d)
+        Ndz = Array{Float64}(p, p, d)
+        Ndo = Array{Float64}(p, p, d)
+        Ndt = Array{Float64}(p, p, d)
+        rdz[:, d] = r[:, d]
+        rdo[:, d] = 0.0
+        Ndz[:, :, d] = N[:, :, d]
+        Ndo[:, :, d] = 0.0
+        Ndt[:, :, d] = 0.0
+    end    
     
-#     resize!(cf.f.a.data, TT+offset)
-#     resize!(cf.f.P.data, TT+offset)
-#     resize!(cf.c.F.data, TT+offset)
-#     resize!(cf.c.Y.data, TT+offset)
-#     @unpack Z, H, T, R, Q = cf.p      
-#     a, P = currentstate(cf)
-#     @inbounds for t = 1:TT
-#         y = Y[t,:]
-#         a, P, v, F, F⁻¹, Pstar, Pinf = filterstep(a, P, Z, H, T, R, Q, Y[t])
-#         cf.f.a[t+offset] = a
-#         cf.f.P[t+offset] = P
-#         if cf.i.d[1] == t
-#             cf.f.Pstar[t+offset] = Pstar
-#             cf.f.Pinf[t+offset] = Pinf
-#         end
-#         cf.c.F⁻¹[t+offset] = [F⁻¹]
-#         cf.c.F[t+offset] = [F]
-#         cf.c.Y[t+offset] = [Y[t]]
-#         s = 0.5*logdet(F)+v'*F⁻¹*v
-#         cf.loglik[1] += - p/2*log(2π) - s[1]
-#         cf.t[] += 1
-#     end
-# end
+    for t in n:-1:d #(d+1)
+        v .= Y[t] .- Z*a[t-1]
+        L .= convert(Matrix, T .- T*P[t-1]*Z'*F⁻¹[t]*Z)
+        r′ .= Z'*F⁻¹[t]*v .+ L'*r
+        â[t] = convert(Tuple, a[t-1] .+ P[t-1]*r′)
+        N′ .= convert(Matrix, Z'*F⁻¹[t]*Z + L'*N*L)
+        V[t] = tuple((P[t-1] .- P[t-1]*N′*P[t-1])...)
+        copy!(N, N')
+        copy!(r, r′)
+    end
 
-# function Base.filter!(cf::LinearStateSpace{KFP} where KFP<:KFParms{A}, Y::Vector{Float64}) where A<:AbstractFloat
-#     TT = length(Y)
-#     p, m, r = size(cf.p)
-#     @assert p==1 "Inconsistent dimension. Y must be (Tx1)."
-#     ## Check whether the last element of cf.f.a is not undef
-#     @assert isassigned(cf.f.a, length(cf.f.a))
-#     @assert isassigned(cf.f.P, length(cf.f.P))
-#     # @assert isassigned(cf.c.F, length(cf.c.F))
-#     # @assert isassigned(cf.c.Y, length(cf.c.Y))
-#     offset = cf.t[]
-#     resize!(cf.f.a.data, TT+offset)
-#     resize!(cf.f.P.data, TT+offset)
-#     resize!(cf.c.F.data, TT+offset)
-#     resize!(cf.c.Y.data, TT+offset)
-#     @unpack Z, H, T, R, Q = cf.p      
-#     a, P = currentstate(cf)
-#     @inbounds for t = 1:TT
-#         a, P, v, F, F⁻¹, Pstar, Pinf = filterstep(a, P, Z, H, T, R, Q, Y[t])        
-#         cf.f.a[t+offset] = a
-#         cf.f.P[t+offset] = P
-#         if cf.i.d[1] == t
-#             cf.f.Pstar[t+offset] = Pstar
-#             cf.f.Pinf[t+offset] = Pinf
-#         end
-#         cf.c.F⁻¹[t+offset] = [F⁻¹]
-#         cf.c.F[t+offset] = [F]
-#         cf.c.Y[t+offset] = [Y[t]]
-#         s = 0.5*logdet(F)+v'*F⁻¹*v
-#         cf.loglik[1] += - p/2*log(2π) - s[1]
-#         cf.t[] += 1
-#     end       
-# end
-
-
-# function Base.filter!(cf::LinearStateSpace{KFP} where KFP<:KFParms{A}, y::Float64) where A<:Float64
-#     a, P = currentstate(cf)
-#     p, m, r = size(cf.p)
-#     @unpack Z, H, T, R, Q = cf.p  
-#     att, Ptt, F⁻¹ = filterstep(Z, H, T, R, Q, y)
-#     push!(cf.f.a, att)
-#     push!(cf.f.P, Ptt)
-#     push!(cf.c.F⁻¹, [F⁻¹])
-#     push!(cf.c.F, [F])
-#     push!(cf.c.Y, [y])
-#     cf.loglik[1] += - p/2*log(2π) - 0.5*abs(F)+v*v/F
-#     cf.t[] += 1
-# end
-
-# function smooth!(cf::LinearStateSpace)
-#     n = cf.t[]::Int64
-#     p, m, r = size(cf.p)
-#     @assert n > 1 "There is not data to smooth over"
-#     @unpack Z, H, T, R, Q = cf.p  
-#     F⁻¹ = cf.c.F
-#     Y   = cf.c.Y
-#     a   = cf.f.a
-#     P   = cf.f.P
-#     â  = Array{Float64}(m, n)
-#     V  = Array{Float64}(m, m, n)
-#     r  = Array{Float64}(p, n)
-#     N   = Array{Float64}(p, p, n)
-#     r[:,n] = 0.0
-#     N[:, :, n] = 0.0
-#     for t in n:-1:2
-#         v = Y[t] .- Z*a[t-1]
-#         L = T .- T*P[t-1]*Z'*F⁻¹[t]*Z
-#         r[:, t-1] = Z'*F⁻¹[t]*v .+ L'*r[:, t]
-#         â[:, t] = a[t-1] .+ P[t-1]*r[:,t-1]
-#         N[:, :, t-1] = reshape(convert(Matrix, Z'*F⁻¹[t]*Z + L'*N[:,:,t]*L), (p, p, 1))
-#         V[:, :, t]   = reshape(convert(Matrix, P[t-1] .- P[t-1]*N[:, :, t-1]*P[t-1]), (p, p, 1))
-#     end
-#     cf.s.r = r[:, 1:n-1]'
-#     cf.s.a = â'[2:end,:]
-#     cf.s.V = V[:, :, 2:end]
-#     cf.s.N = N[:, :, 1:n-1]
-# end
-
-
-
-
+    ## Diffuse step
+    for t in (d-1):-1:2
+        Pinf = ss.f.Pinf[t-1]
+        Pstar = ss.f.Pstar[t]
+        v = Y[t] .-Z*a[t-1]  
+        if !ss.f.isFsingular[t]
+            Finf = Z*Pinf*Z'
+            Finfinv = inv(Finf)
+            Kinf = T*Pinf*Z*Finfinv
+            Linf = T - Kinf*Z
+            Fstar = Z'*Pstar*Z + H
+            Kstar = (T*Pstar*Z' + Kinf*Fstar)*Finfinv
+            F♯ = Kstar'Ndz[:,:,t]*Kstar - Finfinv*Fstar*Finfinv
+            rdz[:,t-1] = Linf'rdz[:, t]
+            rdo[:,t-1] = Z'*(Finfinv*v - Kstar'rdz[:,t]) + Linf'r[:,t]
+            Ndz[:,:,t-1] = Linf'*Ndz[:,:,t]*Linf
+            A = Linf'Ndz[:,:,t]*Kstar*Z
+            Ndo[:,:,t-1] = Z'Finfinv*Z + Linf'*Ndo[:, :, t]*Linf - A - A'
+            A = Linf'Ndo[:,:,t]*Kstar*Z
+            Ndt[:,:,t-1] = Z'*F♯*Z + Linf'*Ndt[:,:,t]*Linf - A - A'
+            â[:,t-1] = a[t] .+ Pstar*rdz[:,t-1] .+ Pinf*rdz[:,t-1]
+            A = Pinf*Ndo[:,:,t-1]*Pstar
+            V[:,:,t] = Pstar - Pstar*Ndz[:,:,t-1] - A - A'
+        else
+            Fstar = Z'*Pstar*Z + H
+            Fstarinv = inv(Fstar)
+            Lstar = T - Kstar*Z
+            Kstar = T*Pstar*Z'*Fstarinv
+            rdz[:,t-1] = Z'Fstarinv*v - Lstar'rdz[:, t]
+            rdo[:,t-1] = T'rdo[:,t]
+            Ndz[:,:,t-1] = Z'*Fstarinv*Z + Lstar'Ndz[:,:,t]*Lstar            
+            Ndo[:,:,t-1] = T'Ndo[:,:,t]*Lstar
+            Ndt[:,:,t-1] = T*Ndt[:,:,t]*T
+            â[:,t-1] = a[t] .+ Pstar*rdz[:,t-1] .+ Pinf*rdz[:,t-1]
+            A = Pinf*Ndo[:,:,t-1]*Pstar
+            V[:,:,t] = Pstar - Pstar*Ndz[:,:,t-1] - A - A'
+        end
+    end
+    (â, V)
+end
 
 
 
