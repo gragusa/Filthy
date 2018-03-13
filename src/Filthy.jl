@@ -3,6 +3,8 @@ module Filthy
 using StaticArrays
 using GrowableArrays
 using Parameters
+using ForwardDiff
+using Optim
 
 struct KFParms{Zt, Ht, Tt, Rt, Qt}
     Z::Zt
@@ -18,33 +20,63 @@ mutable struct KFFiltered{AT, PT, PI}
     Pstar::PI
     Pinf::PI
     d::Array{Int,1}
-    isFsingular::BitArray{1}
+    flagF::Array{Int, 1}
     hasdiffended::BitArray{1}
 end
+
+
+struct Masked{FREEIDX, FIXEDIDX, FREEITR, FIXEDITR, P}
+    freeindexes::FREEIDX
+    fixedindexes::FIXEDIDX
+    freeitr::FREEITR
+    fixeditr::FIXEDITR
+    parent::P
+end
+
+struct OptimSSM{M, JCACHE, HCACHE, RR, T, F, G, S, Y}
+    m::M
+    jacobiancache::JCACHE
+    hessiancache::HCACHE
+    Z::Matrix{Float64}
+    H::Matrix{Float64}
+    R::RR
+    T::Matrix{Float64}
+    Q::Matrix{Float64}
+    a1::T
+    P1::F
+    P1inf::G
+    Pstar::S
+    y::Y
+end
+
+struct OptimSSMScalar{T<:AbstractFloat}
+    par::Array{T, 1}
+    idx::BitArray{1}
+    a1::T
+    P1::T
+    P1inf::T
+    Pstar::T
+    y::Array{T, 1}
+end
+
 
 function KFFiltered(a, P, Pinf::Void, Q::Union{AbstractArray, AbstractFloat})
     KFFiltered(a, P, P, P, [1], BitArray{1}([0]), BitArray([1]))
 end
 
-function KFFiltered(a, P, Pinf::AbstractMatrix, Q::AbstractMatrix)
+
+
+function KFFiltered(a1, P1, P1inf::AbstractMatrix)
     ## Check positive element on the diagonal    
-    idx = convert(Array{Int}, [Pinf[j,j]>0 for j in 1:size(Pinf, 1)])
-    Pinf_ = convert(typeof(Pinf), diagm(idx))    
-    R₀ = eye(size(Pinf_,1))
-    R₀[find(Pinf_.==1)] = 0.0
-    R₀ = convert(typeof(Pinf), R₀)
-    Pstar = GrowableArray(R₀*R₀')
-    Pinf′ = GrowableArray(Pinf_)    
-    KFFiltered(a, P, Pstar, Pinf′, [1], BitArray([0]),  BitArray([0]))
+    ## To Do: Check that P1inf is diagonal with diagonal entry > 0
+    a1′, P1′, Pstar = setupdiffusematrices(a1, P1, P1inf)
+    KFFiltered(GrowableArray(a1′), GrowableArray(P1′), GrowableArray(Pstar), GrowableArray(P1inf), [1], [1],  BitArray([0]))
 end
 
-function KFFiltered(a, P, Pinf::AbstractFloat, Q::AbstractFloat)
+function KFFiltered(a1, P1, P1inf::AbstractFloat)
     ## Check positive element on the diagonal    
-    @assert Pinf > 0 "Initial value to diffuse part should be > 0"    
-    Pstar = GrowableArray(0.0)
-    Pinf′ = GrowableArray(Pinf)
-    #isdiff = isdiffuse(Pinf)
-    KFFiltered(a, P, Pstar, Pinf′, [1], BitArray(1),  BitArray([0]))
+    @assert P1inf > 0 "Initial value to diffuse part should be > 0"    
+    KFFiltered(GrowableArray(a1), GrowableArray(P1), GrowableArray(0.0), GrowableArray(P1inf), [1], [1],  BitArray([0]))
 end
 
 mutable struct KFSmoothed{AT, PT}
@@ -82,10 +114,10 @@ struct LinearStateSpace{P<:KFParms, F<:KFFiltered, S<:KFSmoothed,  I<:KFInitVal,
     i::I
     c::C
     loglik::L
-    t::N    
+    t::N        
 end
 
-function LinearStateSpace(Z::A, H::A, T::A, R::B, Q::A, a1::AZ, P1::PZ; Pinf::Union{Void, PZ}=nothing) where {A, B, AZ, PZ}
+function LinearStateSpace(Z::A, H::A, T::A, R::B, Q::A, a1::AZ, P1::PZ; P1inf::Union{Void, PZ}=nothing) where {A, B, AZ, PZ}
     @assert isa(P1, A) "P1 must be of type $(typeof(Z))"
     if isa(Z, AbstractMatrix)
         @assert isa(a1, AbstractVector) "a1 must be of type Vector"
@@ -95,10 +127,10 @@ function LinearStateSpace(Z::A, H::A, T::A, R::B, Q::A, a1::AZ, P1::PZ; Pinf::Un
     #checksizes(Z, H, T, R, Q, α0, P1)
     m = numstates(T)::Int64
     p = nummeasur(Z)::Int64
-    a = GrowableArray(a1)
-    P = GrowableArray(P1)
+    # a = GrowableArray(a1)
+    # P = GrowableArray(P1)
     params = KFParms(Z, H, T, R, Q)
-    filter = KFFiltered(a, P, Pinf, Q)
+    filter = KFFiltered(a1, P1, P1inf)
     smooth = KFSmoothed(Array{Float64}(1,1), Array{Float64}(1,1,1), 
                         Array{Float64}(1,1), Array{Float64}(1,1,1))
     inival = KFInitVal(a1, P1)
@@ -146,14 +178,7 @@ function Base.filter!(ss::LinearStateSpace{KFP} where KFP<:KFParms{A}, Y::Matrix
     end
 end
 
-function storepush!(ss, a, P, v, F, F⁻¹, Pinf, Pstar, y, ispd)
-    # @show a
-    # @show P
-    # @show F⁻¹
-    # @show F
-    # @show y
-    # @show Pinf
-    # @show Pstar
+function storepush!(ss, a, P, v, F, F⁻¹, Pinf, Pstar, y, flag)
     push!(ss.f.a, a)
     push!(ss.f.P, P)
     push!(ss.c.F⁻¹, F⁻¹)
@@ -162,16 +187,11 @@ function storepush!(ss, a, P, v, F, F⁻¹, Pinf, Pstar, y, ispd)
     push!(ss.f.Pinf, Pinf)
     push!(ss.f.Pstar, Pstar)
     ss.f.d[1] += 1
-    push!(ss.f.isFsingular, !ispd)
+    push!(ss.f.flagF, flag)
     nothing
 end
 
 function storepush!(ss, a, P, v, F, F⁻¹, y)
-    # @show a
-    # @show P
-    # @show F⁻¹
-    # @show F
-    # @show y
     push!(ss.f.a, a)
     push!(ss.f.P, P)
     push!(ss.c.F⁻¹, F⁻¹)
@@ -180,7 +200,7 @@ function storepush!(ss, a, P, v, F, F⁻¹, y)
     nothing
 end
 
-function storeset!(ss, a, P, v, F, F⁻¹, Pinf, Pstar, y, offset, ispd)
+function storeset!(ss, a, P, v, F, F⁻¹, Pinf, Pstar, y, offset, flag)
     idx = ss.t[] + offset
     ss.f.a[idx]    = a
     ss.f.P[idx]    = P
@@ -190,7 +210,7 @@ function storeset!(ss, a, P, v, F, F⁻¹, Pinf, Pstar, y, offset, ispd)
     push!(ss.f.Pinf, Pinf)
     push!(ss.f.Pstar, Pstar)
     ss.f.d[1] += 1
-    push!(ss.f.isFsingular, !ispd)
+    push!(ss.f.flagF, flag)
     nothing
 end
 
@@ -218,9 +238,9 @@ end
 function onlinefilterstep!(ss::LinearStateSpace, y, v::Type{Val{true}})
     a, P, Pinf, Pstar = currentstate(ss, Val{true})
     @unpack Z, H, T, R, Q = ss.p
-    a′, P′, v, F, F⁻¹, Pinf′, Pstar′, ispd = filterstep(a, P, Pinf, Pstar, Z, H, T, R, Q, y)    
+    a′, P′, v, F, F⁻¹, Pinf′, Pstar′, flag = filterstep(a, P, Pinf, Pstar, Z, H, T, R, Q, y)    
     ss.f.hasdiffended[1] = norm(Pinf′) <= 1e-08
-    storepush!(ss, a′, P′, v, F, F⁻¹, Pinf′, Pstar′, y, ispd)                
+    storepush!(ss, a′, P′, v, F, F⁻¹, Pinf′, Pstar′, y, flag)                
 end
 
 function onlinefilterstep_set!(ss::LinearStateSpace, y, offset, v::Type{Val{false}})
@@ -234,13 +254,13 @@ end
 function onlinefilterstep_set!(ss::LinearStateSpace, y, offset, v::Type{Val{true}})
     a, P, Pinf, Pstar = currentstate(ss, Val{true})
     @unpack Z, H, T, R, Q = ss.p
-    a′, P′, v, F, F⁻¹, Pinf′, Pstar′, ispd = filterstep(a, P, Pinf, Pstar, Z, H, T, R, Q, y)    
+    a′, P′, v, F, F⁻¹, Pinf′, Pstar′, flag = filterstep(a, P, Pinf, Pstar, Z, H, T, R, Q, y)    
     ss.f.hasdiffended[1] = norm(Pinf′) <= 1e-06
-    storeset!(ss, a′, P′, v, F, F⁻¹, Pinf′, Pstar′, y, offset, ispd)
-    updatelik!(ss, v, F, F⁻¹, ispd)
+    storeset!(ss, a′, P′, v, F, F⁻¹, Pinf′, Pstar′, y, offset, flag)
+    updatelik!(ss, v, F, F⁻¹, flag)
 end
 
-function filterstep(a, P, Z, H, T, R, Q, y)
+function filterstep(a::AA, P::PP, Z, H, T, R, Q, y) where {AA, PP}
     ## Non-diffuse step
     v = y .- Z*a
     F = Z*P*Z' .+ H    
@@ -254,11 +274,11 @@ end
 
 function filterstep(a, P, Pinf, Pstar, Z, H, T, R, Q, y)
     Finf = Z*Pinf*Z'
-    (isFinvertible, Finfinv) = Filthy.safeinverse(Finf)    
-    diffusefilterstep(a, P, Pinf, Pstar, Finf, Finfinv, Z, H, T, R, Q, y, Val{isFinvertible})    
+    (Fflag, Finfinv) = Filthy.safeinverse(Finf)    
+    diffusefilterstep(a, P, Pinf, Pstar, Finf, Finfinv, Z, H, T, R, Q, y, Val{Fflag})    
 end
 
-function diffusefilterstep(a, P, Pinf, Pstar, Finf, Finfinv, Z, H, T, R, Q, y, ::Type{Val{true}})
+function diffusefilterstep(a, P, Pinf, Pstar, Finf, Finfinv, Z, H, T, R, Q, y, ::Type{Val{1}})
     ## Finf is invertible
     v     = y .- Z*a
     Kinf  = T*Pinf*Z'*Finfinv
@@ -269,14 +289,11 @@ function diffusefilterstep(a, P, Pinf, Pstar, Finf, Finfinv, Z, H, T, R, Q, y, :
     Pinf′  = T*Pinf*Linf' 
     Pstar′ = T*Pstar*Linf' + Kinf*Finf*Kstar' + R*Q*R
     P′     = Pstar′
-    @show Finfinv
-    @show Pstar′
-    @show Pinf′    
-    (a′, P′, v, Finf, Finfinv, Pinf′, Pstar′, true)
+    (a′, P′, v, Finf, Finfinv, Pinf′, Pstar′, 1)
 end
 
-function diffusefilterstep(a, P, Pinf, Pstar, Finf, Finfinv, Z, H, T, R, Q, y, ::Type{Val{false}})
-    ## Finf is not notposdef/invertible
+function diffusefilterstep(a, P, Pinf, Pstar, Finf, Finfinv, Z, H, T, R, Q, y, ::Type{Val{0}})
+    ## Finf is not > 0
     v     = y - Z*a        
     Fstar = Z*Pstar*Z' + H
     Fstarinv = inv(Fstar)  
@@ -286,9 +303,7 @@ function diffusefilterstep(a, P, Pinf, Pstar, Finf, Finfinv, Z, H, T, R, Q, y, :
     Pinf′  = T*Pinf*T' 
     Pstar′ = T*Pstar*Lstar' + R*Q*R
     P′     = Pstar′
-    @show Pstar′
-    @show Pinf′
-    (a′, P′, v, Fstar, Fstarinv, Pinf′, Pstar′, false)
+    (a′, P′, v, Fstar, Fstarinv, Pinf′, Pstar′, 0)
 end
 
 function smooth!(ss::LinearStateSpace)
@@ -339,7 +354,7 @@ function smooth!(ss::LinearStateSpace)
         Pinf = ss.f.Pinf[t-1]
         Pstar = ss.f.Pstar[t]
         v = Y[t] .-Z*a[t-1]
-        if !ss.f.isFsingular[t]
+        if ss.f.flagF[t] == 1
             Finf = Z*Pinf*Z'
             Finfinv = inv(Finf)
             Kinf = T*Pinf*Z*Finfinv
@@ -376,101 +391,136 @@ function smooth!(ss::LinearStateSpace)
     ss.s.a = â'[2:end, :]
     ss.s.V = V[:, :, 2:end]
     ss.s.N = N[:, :, 1:n-1]
+    nothing
+end
+
+function fastloglik(Z::AbstractMatrix, H, T, R, Q, a′, P′, Pinf′, Pstar′, Y::AbstractMatrix)
+    n, p = size(Y)
+    ll = zero(eltype(Z))
+    j = 1; p = 1
+    c = -p*n*log(2π)/2
+    while (any(Pinf′ .> 0)) & (j < n)
+        a′, P′, v, F, F⁻¹, Pinf′, Pstar′, flag = filterstep(a′, P′, Pinf′, Pstar′, Z, H, T, R, Q, Y[j,:])
+        ll += loglik(v, F, F⁻¹, flag)
+        j += 1
+    end
+    for t in j:n
+        a′, P′, v, F, F⁻¹ = filterstep(a′, P′, Z, H, T, R, Q, Y[t, :])        
+        ll += loglik(v, F, F⁻¹)
+        a = a′ 
+        P = P′
+    end
+    ll +c
+end
+
+function fastloglikscalar(Z::FF, H::FF, T::FF, R::FF, Q::FF, a1::G, P1::G, P1inf::G, Pstar::G, y) where {FF<:Real, G<:AbstractFloat}
+    ll = zero(eltype(Z));  n = length(y)
+    a = a1; P = P1; j = 1; p = 1; c = -n/2*log(2π)
+    while (P1inf > 0) & (j < n)
+        a, P, v, F, F⁻¹, P1inf, Pstar, flag = filterstep(a, P, P1inf, Pstar, Z, H, T, R, Q, y[j])
+        ll += loglik(v, F, F⁻¹, flag)
+        j += 1
+    end
+    for t in j:n
+        a, P, v, F, F⁻¹ = filterstep(a, P, Z, H, T, R, Q, y[t])
+        ll += loglik(v, F, F⁻¹)
+    end
+    ll + c
+end
+
+function futil(ossm::OptimSSM, theta)
+    ZZ = similar(theta, size(ossm.Z))
+    CHH = similar(theta, size(ossm.H))
+    TT = similar(theta, size(ossm.T))
+    CQQ = similar(theta, size(ossm.Q))
+    R  = ossm.R
+    a1 = ossm.a1
+    P1 = ossm.P1
+    P1inf = ossm.P1inf
+    Pstar = ossm.Pstar
+    remask!(ossm.m, (ZZ, CHH, TT, CQQ), theta)
+    -fastloglik(ZZ, CHH*CHH', TT, R, CQQ*CQQ', a1, P1, P1inf, Pstar, ossm.y)
+end
+
+function futil_scalar(ossm::OptimSSMScalar, theta)    
+    a1 = ossm.a1
+    P1 = ossm.P1
+    P1inf = ossm.P1inf
+    Pstar = ossm.Pstar
+    idx = ossm.idx
+    par = ossm.par
+    x = similar(theta, length(par))
+    copy!(x, par)
+    x[idx] = theta
+    -fastloglikscalar(x[1], exp(x[2]), x[3], x[4], exp(x[5]), a1, P1, P1inf, Pstar, y)   
+end
+
+function fit(::Type{LinearStateSpace}, Z::A, CH::A, T::A, R::B, CQ::A, a1::AZ, P1::PZ, P1inf::PZ, Y, start) where {A<:AbstractMatrix, B, AZ<:AbstractVector, PZ<:AbstractMatrix}
+    @assert islowertriangular(CH) "CH must be lower triangular"
+    @assert islowertriangular(CQ) "CQ must be lower triangular"
+    Z₀, CH₀, T₀, CQ₀ = map(obj-> convert(Matrix, obj), (Z, CH, T, CQ))
+    mask = Masked((Z₀, CH₀, T₀, CQ₀))
+    allfixed(mask) && return LinearStateSpaceModel(Z, CH*CH', T, T, CQ*CQ', a1, P1, P1inf)
+    ## Setup and do maximum likelihood
+    ## Copy matrices to Matrix{Float64}        
+    a, P, Pstar = setupdiffusematrices(a1, P1, P1inf)
+    fitobj = OptimSSM(mask, Z₀, CH₀, R, T₀, CQ₀, a, P, P1inf, Pstar, Y)    
+    f(x) = futil(fitobj, x)
+    od = Optim.OnceDifferentiable(f, start, autodiff = :forward)
+    out = Optim.optimize(od, start, BFGS())
+    remask!(mask, (Z₀, CH₀, T₀, CQ₀), Optim.minimizer(out))
+    ZZ = SMatrix{size(Z)...}(Z₀)
+    HH = SMatrix{size(CH)...}(CH₀*CH₀')
+    TT = SMatrix{size(T)...}(T₀)
+    QQ = SMatrix{size(CQ)...}(CQ₀*CQ₀')
+    aa = SVector{length(a1)}(fitobj.a1)
+    PP = SMatrix{size(P1)...}(fitobj.P1)
+    PPinf = SMatrix{size(P1)...}(fitobj.P1inf)    
+    LinearStateSpace(ZZ, HH, TT, R, QQ, aa, PP, P1inf=PPinf)
+end
+
+function fit(::Type{LinearStateSpace}, Z::A, H::A, T::A, R::B, Q::A, a1::AZ, P1::PZ, P1inf::PZ, Y, start) where {A<:AbstractFloat, B, AZ<:AbstractFloat, PZ<:AbstractFloat}
+    @assert !((P1inf != zero(P1inf)) && (P1inf != one(P1inf))) "P1inf must be either 1.0 or 0.0"
+    Pstar = one(P1inf)
+    if P1inf == zero(P1inf)
+        @assert P1 > 0 "P1 and P1inf cannot be both zero"       
+    elseif P1inf == one(P1inf)
+        P1 = zero(P1inf)
+        Pstar = zero(P1inf)
+    end
+    b = [Z, H, T, R, Q]
+    idx = isnan.(b)
+    b[idx] = start
+    start[:] = log.(b[idx .& [false, true, false, false, true]])
+    so = OptimSSMScalar(b, idx, a1, P1, P1inf, Pstar, y)
+    f(x) = futil_scalar(so, x)
+    od = Optim.OnceDifferentiable(f, start, autodiff = :forward)
+    out = Optim.optimize(od, start, BFGS())   
+    solution = Optim.minimizer(out)
+    b[idx] = solution
+    solution[:] = exp.(b[idx .& [false, true, false, false, true]])
+    b[idx] = solution
+    out.minimizer[:] = solution
+    out.initial_x[:] = solution
+    LinearStateSpace(b[1], b[2], b[3], b[4], b[5], a1, P1, P1inf=P1inf)
 end
 
 
-
-
-
-function fastsmooth!(ss::LinearStateSpace)
-    n = ss.t[]::Int64
-    p, m, r = size(ss.p)
-    @assert n > 1 "There is not data to smooth over"
-    @unpack Z, H, T, R, Q = ss.p  
-    F⁻¹ = ss.c.F⁻¹
-    Y  = ss.c.Y
-    a  = ss.f.a
-    P  = ss.f.P
-    # â  = Array{Float64}(m, n)
-    # V  = Array{Float64}(m, m, n)
-    â = Array{NTuple{m, Float64}}(n)
-    V = Array{NTuple{m^2, Float64}}(n)
-    r = zeros(p)
-    N = zeros(p, p)
-    r′ = zeros(p)
-    N′ = zeros(p, p)
-    v = Array{Float64}(p)
-    L = Array{Float64}(m,m)
-    d  = ss.f.d[1]
-
-    if d>2
-        rdz = Array{Float64}(p, d)
-        rdo = Array{Float64}(p, d)
-        Ndz = Array{Float64}(p, p, d)
-        Ndo = Array{Float64}(p, p, d)
-        Ndt = Array{Float64}(p, p, d)
-        rdz[:, d] = r[:, d]
-        rdo[:, d] = 0.0
-        Ndz[:, :, d] = N[:, :, d]
-        Ndo[:, :, d] = 0.0
-        Ndt[:, :, d] = 0.0
-    end    
-    
-    for t in n:-1:d #(d+1)
-        v .= Y[t] .- Z*a[t-1]
-        L .= convert(Matrix, T .- T*P[t-1]*Z'*F⁻¹[t]*Z)
-        r′ .= Z'*F⁻¹[t]*v .+ L'*r
-        â[t] = convert(Tuple, a[t-1] .+ P[t-1]*r′)
-        N′ .= convert(Matrix, Z'*F⁻¹[t]*Z + L'*N*L)
-        V[t] = tuple((P[t-1] .- P[t-1]*N′*P[t-1])...)
-        copy!(N, N')
-        copy!(r, r′)
-    end
-
-    ## Diffuse step
-    for t in (d-1):-1:2
-        Pinf = ss.f.Pinf[t-1]
-        Pstar = ss.f.Pstar[t]
-        v = Y[t] .-Z*a[t-1]  
-        if !ss.f.isFsingular[t]
-            Finf = Z*Pinf*Z'
-            Finfinv = inv(Finf)
-            Kinf = T*Pinf*Z*Finfinv
-            Linf = T - Kinf*Z
-            Fstar = Z'*Pstar*Z + H
-            Kstar = (T*Pstar*Z' + Kinf*Fstar)*Finfinv
-            F♯ = Kstar'Ndz[:,:,t]*Kstar - Finfinv*Fstar*Finfinv
-            rdz[:,t-1] = Linf'rdz[:, t]
-            rdo[:,t-1] = Z'*(Finfinv*v - Kstar'rdz[:,t]) + Linf'r[:,t]
-            Ndz[:,:,t-1] = Linf'*Ndz[:,:,t]*Linf
-            A = Linf'Ndz[:,:,t]*Kstar*Z
-            Ndo[:,:,t-1] = Z'Finfinv*Z + Linf'*Ndo[:, :, t]*Linf - A - A'
-            A = Linf'Ndo[:,:,t]*Kstar*Z
-            Ndt[:,:,t-1] = Z'*F♯*Z + Linf'*Ndt[:,:,t]*Linf - A - A'
-            â[:,t-1] = a[t] .+ Pstar*rdz[:,t-1] .+ Pinf*rdz[:,t-1]
-            A = Pinf*Ndo[:,:,t-1]*Pstar
-            V[:,:,t] = Pstar - Pstar*Ndz[:,:,t-1] - A - A'
-        else
-            Fstar = Z'*Pstar*Z + H
-            Fstarinv = inv(Fstar)
-            Lstar = T - Kstar*Z
-            Kstar = T*Pstar*Z'*Fstarinv
-            rdz[:,t-1] = Z'Fstarinv*v - Lstar'rdz[:, t]
-            rdo[:,t-1] = T'rdo[:,t]
-            Ndz[:,:,t-1] = Z'*Fstarinv*Z + Lstar'Ndz[:,:,t]*Lstar            
-            Ndo[:,:,t-1] = T'Ndo[:,:,t]*Lstar
-            Ndt[:,:,t-1] = T*Ndt[:,:,t]*T
-            â[:,t-1] = a[t] .+ Pstar*rdz[:,t-1] .+ Pinf*rdz[:,t-1]
-            A = Pinf*Ndo[:,:,t-1]*Pstar
-            V[:,:,t] = Pstar - Pstar*Ndz[:,:,t-1] - A - A'
-        end
-    end
-    (â, V)
+function reset!(ss::LinearStateSpace)
+    ## Clean filtered and smoothed states
+    resize!(ss.f.a.data, 1)
+    resize!(ss.f.P.data, 1)
+    resize!(ss.f.Pstar.data, 1)
+    resize!(ss.f.Pinf.data, 1)
+    resize!(ss.f.flagF, 1)
+    resize!(ss.c.Y.data, 1)
+    resize!(ss.c.F.data, 1)
+    resize!(ss.c.F⁻¹.data, 1)
+    ss.f.d[1] = 1    
+    ss.f.hasdiffended = [false]
+    ss.t[] = 1
+    nothing
 end
-
-
-
-
 
 function simulate(cf::LinearStateSpace, nout) 
     @unpack Z, H, T, R, Q = cf.p  
@@ -493,7 +543,6 @@ loglik(cf) = cf.loglik[]::Float64
 
 include("methods.jl")
 
-export LinearStateSpace, simulate
-
+export LinearStateSpace, simulate, filter!, smooth!, fit, reset!
 
 end # module

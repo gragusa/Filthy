@@ -16,9 +16,9 @@ end
 # end
 
 
-function updatelik!(ss, v, F, F⁻¹, ispd) 
+function updatelik!(ss, v, F, F⁻¹, Fflag) 
     p, m, r = size(ss)
-    s = ispd ? 0.5*(logdet(F)) : s = 0.5*(logdet(F) + v'F⁻¹*v)
+    s = Fflag == 1 ? 0.5*(logdet(F)) : 0.5*(logdet(F) + v'F⁻¹*v)
     ss.loglik[1] += -p/2*log(2π) - first(s)
 end
 
@@ -28,19 +28,24 @@ function updatelik!(ss, v, F, F⁻¹)
     ss.loglik[1] += -p/2*log(2π) - first(s)
 end
 
+function loglik(v, F, F⁻¹)
+     - 0.5*(logdet(F) + v'F⁻¹*v)
+end
 
+function loglik(v, F, F⁻¹, flag)
+    s = flag == 1 ? 0.5*(logdet(F)) : 0.5*(logdet(F) + v'F*v)
+    - first(s)
+end
 
 isdiffuse(Pinf::StaticMatrix) = any(Pinf.data.!=0)
 isdiffuse(Pinf::AbstractFloat) = Pinf>0
 isdiffuse(Pinf::AbstractMatrix) = any(Pinf.!=0)
-
 
 numstates(a::AbstractArray) = size(a,1)
 numstates(a::AbstractFloat) = 1
 
 nummeasur(a::AbstractArray) = size(a,1)
 nummeasur(a::AbstractFloat) = 1
-
 
 Base.size(cf::LinearStateSpace) = size(cf.p)
 
@@ -51,14 +56,16 @@ testposdef(x::AbstractArray) = isposdef(x)
 testposdef(x::StaticMatrix) = all(map(u-> u[1]>0, eig(x)))
 
 function safeinverse(x)
-        out = try
-            (true, inv(x))
+    flag = any(abs.(x) .> 1e-07) ? 1 : 0
+    if flag > 0
+        try
+            (flag, inv(x))
         catch mesg
-            println(mesg)
-            (false, x)
-        end
-        out
-        
+            throw(DomainError)
+        end        
+    else
+        (flag, x)
+    end        
 end
 
 toarray(b) = b
@@ -75,7 +82,7 @@ end
 function checkfilterdataconsistency(ss::LinearStateSpace, Y::Matrix)
     q, T = size(Y)
     p, m, r = size(ss.p)
-    msg = p == 1 ? "a Vector" : "a (Tx$p) Matrix"
+    msg = "a (Tx$p) Matrix"
     @assert p==q "Inconsistent dimension. Y must be "*msg
     (T, p, m, r, ss.t[])
 end
@@ -89,28 +96,80 @@ function resizecontainer!(ss::LinearStateSpace, n::Int64)
 end
 
 
+function Masked(a::NTuple)
+    rnan = map(y->find(x -> isnan.(x), y), a)
+    nnan = map(y->find(x -> !isnan.(x), y), a)
+    freeitr = map(x -> enumerate(x), rnan)
+    fixeditr = map(x -> enumerate(x), nnan)       
+    Masked(rnan, nnan, freeitr, fixeditr, a)
+end
 
-# function checksizes(Z::P, H::P, T::P, R::P, Q::P, Y::Matrix{Float64}) where P<:AbstractArray{Float64, 2}
-#     rZ, cZ = size(Z)
-#     rH, cH = size(H)
-#     rT, cT = size(T)
-#     rR, cR = size(R)
-#     rQ, cQ = size(Q)
-#     ## Time series dimension -> column of Y
-#     p, T = size(Y)
 
-#     @assert p == rZ  "The dimension of Y does not agree with the dimension of Z"
-#     @assert p == rH  "The dimension of Y does not agree with the dimension of H"
 
-#     @assert rH == cH "H must be a square matrix"
-#     @assert rQ == cQ "Q must be a square matrix"
-#     @assert rT == cT "T must be a square matrix"
+prototypical(m::Masked) = zeros(sum(map(i->length(i), m.freeitr)))
 
-#     @assert rT == rR "The dimension of T does not agree with the dimension of R"
-#     @assert rT == rQ "The dimension of T does not agree with the dimension of R"
+function OptimSSM(m::Masked, Z, CHH, R, T, CQQ, a1, P1, P1inf, Pstar, y)
+    thetatmp = prototypical(m)
+    jcfg = ForwardDiff.GradientConfig(nothing, thetatmp, ForwardDiff.Chunk(thetatmp))
+    hcfg = ForwardDiff.HessianConfig(nothing, thetatmp, ForwardDiff.Chunk(thetatmp))
+    OptimSSM(m, jcfg, hcfg, Z, CHH, R, T, CQQ, 
+             convert(Vector,a1), 
+             convert(Matrix, P1), 
+             convert(Matrix, P1inf), 
+             convert(Matrix, Pstar), y)
+end
 
-#     @assert cZ == rT "The dimension of Z does not agree with the dimension of T"
-#     @assert cR == rQ "The dimension of R does not agree with the dimension of Q"
 
-# end
+allfixed(x::Masked) = maximum(map(i->length(i), x.freeitr))==0 ? true : false
+
+function remask!(m::Masked, b::NTuple, theta)
+    count = 1
+    map(b, m.freeitr) do y,x
+        for (i,j) in x
+            y[i] = theta[count]
+            count += 1
+        end
+    end
+    map(b, m.fixeditr, m.parent) do y, x, z
+        for (i,j) in x
+            y[i] = z[i]
+        end
+    end
+end
+    
+
+function islowertriangular(x::AbstractMatrix{T}) where T
+    r, c = size(x)
+    out = true
+    for j in 2:c
+        for i in 1:j-1
+            out = x[i,j] == zero(T)
+            if !out
+                break
+            end
+        end
+    end
+    out
+end
+
+@noinline function setupdiffusematrices(a1::T, P1::M, P1inf::M) where {T<:AbstractVector, M<:AbstractMatrix}
+    idx = find(diag(P1inf) .> 0)
+    aa = copy(convert(Vector, a1))
+    PP = copy(convert(Matrix, P1))
+    RR = eye(size(P1, 1))
+    map(idx) do i
+        PP[i,:] = 0.0
+        PP[:,i] = 0.0
+        RR[:,i] = 0.0
+        RR[i,:] = 0.0
+        aa[i] = 0.0
+    end
+    a1′ = convert(typeof(a1), aa)
+    P1′ = convert(typeof(P1), PP)
+    Pstar = convert(typeof(P1), RR*RR')
+    (a1′::T, P1′::M, Pstar::M)
+end
+
+
+
     

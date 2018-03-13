@@ -33,6 +33,9 @@ Rs = SMatrix{1,1}(Rn)
 Ts = SMatrix{1,1}(Tn)
 Qs = SMatrix{1,1}(Qn)
 
+
+
+
 #=
 Constructors
 =----------=#
@@ -177,12 +180,20 @@ end
 
 
 
-# Values from MLE (inexact, P = 1e07)
+# Values from MLE (inexact, P = 1)
 Zn = fill(1.0, (1,1))
 Hn = fill(15098.654334841132368, (1,1))
 Rn = fill(1.0, (1,1))
 Tn = fill(1.0, (1,1))
 Qn = fill(1469.1632513366273542, (1,1))
+
+Zs = SMatrix{1,1}(Zn)
+Hs = SMatrix{1,1}(Hn)
+Rs = SMatrix{1,1}(Rn)
+Ts = SMatrix{1,1}(Tn)
+Qs = SMatrix{1,1}(Qn)
+
+
 
 ss = LinearStateSpace(Zs, Hs, Ts, Rs, Qs, SVector{1}(0.0), SMatrix{1,1}(fill(0., (1,1))), Pinf = SMatrix{1,1}([1.0]))
 Filthy.filter!(ss, nile')
@@ -199,8 +210,13 @@ Filthy.filter!(ss, nile')
     @test ss.loglik[1] ≈ -633.46456
 end
 
-
-
+#=
+Smoothing
+---------=#
+Filthy.smooth!(ss)
+@testset "State smoother" begin
+    ss.s.a[1]
+end
 
 
 
