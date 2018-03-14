@@ -101,14 +101,12 @@ function Masked(a::NTuple)
     nnan = map(y->find(x -> !isnan.(x), y), a)
     freeitr = map(x -> enumerate(x), rnan)
     fixeditr = map(x -> enumerate(x), nnan)       
-    Masked(rnan, nnan, freeitr, fixeditr, a)
+    Masked(rnan, nnan, freeitr, fixeditr, a, [1])
 end
-
-
 
 prototypical(m::Masked) = zeros(sum(map(i->length(i), m.freeitr)))
 
-function OptimSSM(m::Masked, Z, CHH, R, T, CQQ, a1, P1, P1inf, Pstar, y)
+function OptimSSM(m::Masked, Z, CHH, T, R, CQQ, a1, P1, P1inf, Pstar, y)
     thetatmp = prototypical(m)
     jcfg = ForwardDiff.GradientConfig(nothing, thetatmp, ForwardDiff.Chunk(thetatmp))
     hcfg = ForwardDiff.HessianConfig(nothing, thetatmp, ForwardDiff.Chunk(thetatmp))
@@ -123,18 +121,20 @@ end
 allfixed(x::Masked) = maximum(map(i->length(i), x.freeitr))==0 ? true : false
 
 function remask!(m::Masked, b::NTuple, theta)
-    count = 1
-    map(b, m.freeitr) do y,x
+    count = m.count
+    map(b, m.freeitr) do y,x        
         for (i,j) in x
-            y[i] = theta[count]
-            count += 1
+            y[j] = theta[count[1]]; 
+            count[1] += 1            
         end
-    end
+    end    
+    count[1] = 1
     map(b, m.fixeditr, m.parent) do y, x, z
-        for (i,j) in x
-            y[i] = z[i]
+        for (i,j) in x            
+            @inbounds y[j] = z[j]
         end
     end
+    nothing
 end
     
 

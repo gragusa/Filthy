@@ -31,6 +31,35 @@ struct Masked{FREEIDX, FIXEDIDX, FREEITR, FIXEDITR, P}
     freeitr::FREEITR
     fixeditr::FIXEDITR
     parent::P
+    count::Array{Int64, 1}
+end
+
+struct OptimSSMPar{T, G, S}
+    Z::Matrix{T}
+    H::Matrix{T}
+    R::Matrix{T}
+    T::Matrix{T}
+    Q::Matrix{T}
+    a1::Vector{T}
+    P1::Vector{T}
+    P1inf::G
+    Pstar::S
+end
+
+struct OptimSSMParDual{T, F, N}
+    Z::ForwardDiff.Dual{T,F,N}
+    H::ForwardDiff.Dual{T,F,N}
+    R::ForwardDiff.Dual{T,F,N}
+    T::ForwardDiff.Dual{T,F,N}
+    Q::ForwardDiff.Dual{T,F,N}
+    a1::ForwardDiff.Dual{T,F,N}
+    P1::ForwardDiff.Dual{T,F,N}
+end
+
+struct SSMOptim{M, P, D}
+    m::M
+    p::P
+    d::D
 end
 
 struct OptimSSM{M, JCACHE, HCACHE, RR, T, F, G, S, Y}
@@ -117,7 +146,7 @@ struct LinearStateSpace{P<:KFParms, F<:KFFiltered, S<:KFSmoothed,  I<:KFInitVal,
     t::N        
 end
 
-function LinearStateSpace(Z::A, H::A, T::A, R::B, Q::A, a1::AZ, P1::PZ; P1inf::Union{Void, PZ}=nothing) where {A, B, AZ, PZ}
+function LinearStateSpace(Z::A, H::D, T::A, R::B, Q::A, a1::AZ, P1::PZ; P1inf::Union{Void, PZ}=nothing) where {A, D, B, AZ, PZ}
     @assert isa(P1, A) "P1 must be of type $(typeof(Z))"
     if isa(Z, AbstractMatrix)
         @assert isa(a1, AbstractVector) "a1 must be of type Vector"
@@ -287,7 +316,7 @@ function diffusefilterstep(a, P, Pinf, Pstar, Finf, Finfinv, Z, H, T, R, Q, y, :
     Kstar = (T*Pstar*Z' + Kinf*Fstar)*Finfinv
     a′     = T*a + Kinf*v
     Pinf′  = T*Pinf*Linf' 
-    Pstar′ = T*Pstar*Linf' + Kinf*Finf*Kstar' + R*Q*R
+    Pstar′ = T*Pstar*Linf' + Kinf*Finf*Kstar' + R*Q*R'
     P′     = Pstar′
     (a′, P′, v, Finf, Finfinv, Pinf′, Pstar′, 1)
 end
@@ -301,7 +330,7 @@ function diffusefilterstep(a, P, Pinf, Pstar, Finf, Finfinv, Z, H, T, R, Q, y, :
     Lstar = T - Kstar*Z 
     a′     = T*a + Kstar*v
     Pinf′  = T*Pinf*T' 
-    Pstar′ = T*Pstar*Lstar' + R*Q*R
+    Pstar′ = T*Pstar*Lstar' + R*Q*R'
     P′     = Pstar′
     (a′, P′, v, Fstar, Fstarinv, Pinf′, Pstar′, 0)
 end
@@ -407,8 +436,6 @@ function fastloglik(Z::AbstractMatrix, H, T, R, Q, a′, P′, Pinf′, Pstar′
     for t in j:n
         a′, P′, v, F, F⁻¹ = filterstep(a′, P′, Z, H, T, R, Q, Y[t, :])        
         ll += loglik(v, F, F⁻¹)
-        a = a′ 
-        P = P′
     end
     ll +c
 end
@@ -428,56 +455,80 @@ function fastloglikscalar(Z::FF, H::FF, T::FF, R::FF, Q::FF, a1::G, P1::G, P1inf
     ll + c
 end
 
-function futil(ossm::OptimSSM, theta)
-    ZZ = similar(theta, size(ossm.Z))
-    CHH = similar(theta, size(ossm.H))
-    TT = similar(theta, size(ossm.T))
-    CQQ = similar(theta, size(ossm.Q))
-    R  = ossm.R
-    a1 = ossm.a1
-    P1 = ossm.P1
-    P1inf = ossm.P1inf
-    Pstar = ossm.Pstar
-    remask!(ossm.m, (ZZ, CHH, TT, CQQ), theta)
-    -fastloglik(ZZ, CHH*CHH', TT, R, CQQ*CQQ', a1, P1, P1inf, Pstar, ossm.y)
+
+# function futil_callback(s::OptimSSM, callback::Function = identiy, theta)    
+#     @unpack a1, P1, P1inf, Pstar = s
+#     Z = similar(theta, size(s.Z))
+#     H = similar(theta, size(s.H))
+#     T = similar(theta, size(s.T))
+#     R = similar(theta, size(s.R))
+#     Q = similar(theta, size(s.Q))
+#     ## H and Q are the chol 
+#     remask!(s.m, (Z, H, T, R, Q), theta)
+#     if callback!(s, theta)
+#       -fastloglik(Z, H*H', T, R, Q*Q', a1, P1, P1inf, Pstar, s.y)
+#     else
+#       +Inf
+#     end
+# end
+
+
+function futil(s::OptimSSM, theta)    
+    @unpack a1, P1, P1inf, Pstar = s
+    Z = similar(theta, size(s.Z))
+    H = similar(theta, size(s.H))
+    T = similar(theta, size(s.T))
+    R = similar(theta, size(s.R))
+    Q = similar(theta, size(s.Q))
+    ## H and Q are the chol 
+    remask!(s.m, (Z, H, T, R, Q), theta)    
+    -fastloglik(Z, H*H', T, R, Q*Q', a1, P1, P1inf, Pstar, s.y)
 end
 
-function futil_scalar(ossm::OptimSSMScalar, theta)    
-    a1 = ossm.a1
-    P1 = ossm.P1
-    P1inf = ossm.P1inf
-    Pstar = ossm.Pstar
-    idx = ossm.idx
-    par = ossm.par
+function futil2(s::OptimSSM, theta)    
+    @unpack a1, P1, P1inf, Pstar, Z, H, T, R, Q = s
+    remask!(s.m, (Z, H, T, R, Q), theta)
+    ## H and Q are the chol 
+    ## Missed optimization: Q*Q' and H*H' could be done 
+    ## in place A_mul_bt! --- adding a field to OptimSSM
+    -fastloglik(Z, H*H', T, R, Q*Q', a1, P1, P1inf, Pstar, s.y)
+end
+
+
+function futil_scalar(s::OptimSSMScalar, theta)    
+    @unpack a1, P1, P1inf, Pstar, idx, par, y = s
     x = similar(theta, length(par))
     copy!(x, par)
     x[idx] = theta
-    -fastloglikscalar(x[1], exp(x[2]), x[3], x[4], exp(x[5]), a1, P1, P1inf, Pstar, y)   
+    -fastloglikscalar(x[1], exp(x[2]), x[3], x[4], exp(x[5]), a1, P1, P1inf, Pstar, y)
 end
 
-function fit(::Type{LinearStateSpace}, Z::A, CH::A, T::A, R::B, CQ::A, a1::AZ, P1::PZ, P1inf::PZ, Y, start) where {A<:AbstractMatrix, B, AZ<:AbstractVector, PZ<:AbstractMatrix}
+function fit(::Type{LinearStateSpace}, Z::A, CH::A, T::A, R::A, CQ::A, a1::AZ, P1::PZ, P1inf::PZ, Y, start, lower, upper) where {A<:AbstractMatrix, AZ<:AbstractVector, PZ<:AbstractMatrix}
     @assert islowertriangular(CH) "CH must be lower triangular"
     @assert islowertriangular(CQ) "CQ must be lower triangular"
-    Z₀, CH₀, T₀, CQ₀ = map(obj-> convert(Matrix, obj), (Z, CH, T, CQ))
-    mask = Masked((Z₀, CH₀, T₀, CQ₀))
-    allfixed(mask) && return LinearStateSpaceModel(Z, CH*CH', T, T, CQ*CQ', a1, P1, P1inf)
+    Z₀, CH₀, T₀, R₀, CQ₀ = map(obj-> convert(Matrix, obj), (Z, CH, T, R, CQ))
+    mask = Masked((Z₀, CH₀, T₀, R₀, CQ₀))
+    allfixed(mask) && return LinearStateSpaceModel(Z, CH*CH', T, R, CQ*CQ', a1, P1, P1inf)
     ## Setup and do maximum likelihood
     ## Copy matrices to Matrix{Float64}        
     a, P, Pstar = setupdiffusematrices(a1, P1, P1inf)
-    fitobj = OptimSSM(mask, Z₀, CH₀, R, T₀, CQ₀, a, P, P1inf, Pstar, Y)    
-    f(x) = futil(fitobj, x)
-    od = Optim.OnceDifferentiable(f, start, autodiff = :forward)
-    out = Optim.optimize(od, start, BFGS())
-    remask!(mask, (Z₀, CH₀, T₀, CQ₀), Optim.minimizer(out))
+    fitobj = OptimSSM(mask, Z₀, CH₀, T₀, R₀, CQ₀, a, P, P1inf, Pstar, Y)
+    f(x) = futil(fitobj, x)::Float64
+    d = Optim.OnceDifferentiable(f, start, autodiff = :forward)
+    out = Optim.optimize(d, start, lower, upper, Fminbox{BFGS}())
+    remask!(mask, (Z₀, CH₀, T₀, R₀, CQ₀), Optim.minimizer(out))
     ZZ = SMatrix{size(Z)...}(Z₀)
     HH = SMatrix{size(CH)...}(CH₀*CH₀')
-    TT = SMatrix{size(T)...}(T₀)
+    TT = SMatrix{size(T)...}(T₀)    
+    RR = SMatrix{size(R₀)...}(R₀)
     QQ = SMatrix{size(CQ)...}(CQ₀*CQ₀')
     aa = SVector{length(a1)}(fitobj.a1)
     PP = SMatrix{size(P1)...}(fitobj.P1)
     PPinf = SMatrix{size(P1)...}(fitobj.P1inf)    
     LinearStateSpace(ZZ, HH, TT, R, QQ, aa, PP, P1inf=PPinf)
 end
+
+
 
 function fit(::Type{LinearStateSpace}, Z::A, H::A, T::A, R::B, Q::A, a1::AZ, P1::PZ, P1inf::PZ, Y, start) where {A<:AbstractFloat, B, AZ<:AbstractFloat, PZ<:AbstractFloat}
     @assert !((P1inf != zero(P1inf)) && (P1inf != one(P1inf))) "P1inf must be either 1.0 or 0.0"
@@ -492,16 +543,16 @@ function fit(::Type{LinearStateSpace}, Z::A, H::A, T::A, R::B, Q::A, a1::AZ, P1:
     idx = isnan.(b)
     b[idx] = start
     start[:] = log.(b[idx .& [false, true, false, false, true]])
-    so = OptimSSMScalar(b, idx, a1, P1, P1inf, Pstar, y)
-    f(x) = futil_scalar(so, x)
-    od = Optim.OnceDifferentiable(f, start, autodiff = :forward)
-    out = Optim.optimize(od, start, BFGS())   
-    solution = Optim.minimizer(out)
-    b[idx] = solution
-    solution[:] = exp.(b[idx .& [false, true, false, false, true]])
-    b[idx] = solution
-    out.minimizer[:] = solution
-    out.initial_x[:] = solution
+    s = OptimSSMScalar(b, idx, a1, P1, P1inf, Pstar, y)
+    f(x) = futil_scalar(s, x)
+    d = Optim.OnceDifferentiable(f, start, autodiff = :forward)
+    out = Optim.optimize(d, start, BFGS())   
+    sol = Optim.minimizer(out)
+    b[idx] = sol
+    sol[:] = exp.(b[idx .& [false, true, false, false, true]])
+    b[idx] = sol
+    out.minimizer[:] = sol
+    out.initial_x[:] = sol
     LinearStateSpace(b[1], b[2], b[3], b[4], b[5], a1, P1, P1inf=P1inf)
 end
 
