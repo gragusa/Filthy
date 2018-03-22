@@ -4,88 +4,50 @@ using StaticArrays
 using GrowableArrays
 using Parameters
 using ForwardDiff
-using Optim
+using MathProgBase
 
-struct KFParms{Zt, Ht, Tt, Rt, Qt}
-    Z::Zt
-    H::Ht
-    T::Tt
-    R::Rt
-    Q::Qt
+include("types.jl")
+include("filter.jl")
+include("mpb.jl")
+include("methods.jl")
+
+
+function SSMOptim(m, Z, CH, T, R, CQ, a, P, a1!, P1!, P1inf, Pstar, Y)    
+    t = prototypical(m)
+    CS = ForwardDiff.pickchunksize(length(t))
+    p = SSMOptimPar(Z, CH, T, R, CQ, a, P, a1!, P1!, P1inf, Pstar)
+    jcfg = ForwardDiff.GradientConfig(nothing, t, ForwardDiff.Chunk(CS))
+    hcfg = ForwardDiff.HessianConfig(nothing, t, ForwardDiff.Chunk(CS))
+    M1 = map(a->Array{ForwardDiff.Dual{Void,Float64,CS},2}(size(a)...), (Z, CH, T, R, CQ))
+    a1 = Array{ForwardDiff.Dual{Void,Float64,CS},1}(length(a))
+    M2 = map(a->Array{ForwardDiff.Dual{Void,Float64,CS},2}(size(a)...), (P, P1inf, Pstar))
+    d = SSMOptimParDual(M1..., a1, M2..., jcfg, hcfg)
+    d = SSMOptim(m, p, d, Y)
+    d
 end
 
-mutable struct KFFiltered{AT, PT, PI}
-    a::AT
-    P::PT
-    Pstar::PI
-    Pinf::PI
-    d::Array{Int,1}
-    flagF::Array{Int, 1}
-    hasdiffended::BitArray{1}
+function get_parameters(s::SSMOptim, ::Type{T}) where T 
+    (s.p.Z::Array{T, 2}, 
+    s.p.H::Array{T, 2},   
+    s.p.T::Array{T, 2}, 
+    s.p.R::Array{T, 2}, 
+    s.p.Q::Array{T, 2},  
+    s.p.a1::Array{T, 1},  
+    s.p.P1::Array{T, 2},
+    s.p.P1inf::Array{T, 2}, 
+    s.p.Pstar::Array{T, 2})
 end
 
-
-struct Masked{FREEIDX, FIXEDIDX, FREEITR, FIXEDITR, P}
-    freeindexes::FREEIDX
-    fixedindexes::FIXEDIDX
-    freeitr::FREEITR
-    fixeditr::FIXEDITR
-    parent::P
-    count::Array{Int64, 1}
-end
-
-struct OptimSSMPar{T, G, S}
-    Z::Matrix{T}
-    H::Matrix{T}
-    R::Matrix{T}
-    T::Matrix{T}
-    Q::Matrix{T}
-    a1::Vector{T}
-    P1::Vector{T}
-    P1inf::G
-    Pstar::S
-end
-
-struct OptimSSMParDual{T, F, N}
-    Z::ForwardDiff.Dual{T,F,N}
-    H::ForwardDiff.Dual{T,F,N}
-    R::ForwardDiff.Dual{T,F,N}
-    T::ForwardDiff.Dual{T,F,N}
-    Q::ForwardDiff.Dual{T,F,N}
-    a1::ForwardDiff.Dual{T,F,N}
-    P1::ForwardDiff.Dual{T,F,N}
-end
-
-struct SSMOptim{M, P, D}
-    m::M
-    p::P
-    d::D
-end
-
-struct OptimSSM{M, JCACHE, HCACHE, RR, T, F, G, S, Y}
-    m::M
-    jacobiancache::JCACHE
-    hessiancache::HCACHE
-    Z::Matrix{Float64}
-    H::Matrix{Float64}
-    R::RR
-    T::Matrix{Float64}
-    Q::Matrix{Float64}
-    a1::T
-    P1::F
-    P1inf::G
-    Pstar::S
-    y::Y
-end
-
-struct OptimSSMScalar{T<:AbstractFloat}
-    par::Array{T, 1}
-    idx::BitArray{1}
-    a1::T
-    P1::T
-    P1inf::T
-    Pstar::T
-    y::Array{T, 1}
+function get_parameters(s::SSMOptim, ::Type{T}) where T<:ForwardDiff.Dual  
+    (s.d.Z::Array{T, 2}, 
+    s.d.H::Array{T, 2},   
+    s.d.T::Array{T, 2}, 
+    s.d.R::Array{T, 2}, 
+    s.d.Q::Array{T, 2},  
+    s.d.a1::Array{T, 1},  
+    s.d.P1::Array{T, 2},
+    s.p.P1inf::Array{Float64, 2}, 
+    s.p.Pstar::Array{Float64, 2})
 end
 
 
@@ -93,13 +55,12 @@ function KFFiltered(a, P, Pinf::Void, Q::Union{AbstractArray, AbstractFloat})
     KFFiltered(a, P, P, P, [1], BitArray{1}([0]), BitArray([1]))
 end
 
-
-
 function KFFiltered(a1, P1, P1inf::AbstractMatrix)
     ## Check positive element on the diagonal    
     ## To Do: Check that P1inf is diagonal with diagonal entry > 0
+    hasended = all(diag(P1inf) .== 0) ? 1 : 0
     a1′, P1′, Pstar = setupdiffusematrices(a1, P1, P1inf)
-    KFFiltered(GrowableArray(a1′), GrowableArray(P1′), GrowableArray(Pstar), GrowableArray(P1inf), [1], [1],  BitArray([0]))
+    KFFiltered(GrowableArray(a1′), GrowableArray(P1′), GrowableArray(Pstar), GrowableArray(P1inf), [1], [1],  BitArray([hasended]))
 end
 
 function KFFiltered(a1, P1, P1inf::AbstractFloat)
@@ -108,46 +69,52 @@ function KFFiltered(a1, P1, P1inf::AbstractFloat)
     KFFiltered(GrowableArray(a1), GrowableArray(P1), GrowableArray(0.0), GrowableArray(P1inf), [1], [1],  BitArray([0]))
 end
 
-mutable struct KFSmoothed{AT, PT}
-    a::AT
-    V::PT
-    r::AT
-    N::PT
-end
 
-struct KFInitVal{AT, PT}
-    a1::AT
-    P1::PT
-end
-
-struct KFCache{FF, FI, DD}
-    F⁻¹::FF ## Z*F⁻¹ (m x m)
-    F::FI
-    Y::DD   ## Data 
-end
-
-function KFCache(T::AbstractMatrix, p::Int)
-    KFCache(GrowableArray(zeros(T)), GrowableArray(zeros(T)), GrowableArray(zeros(p)))
+function KFCache(T::AbstractMatrix, p::Int, m::Int, chunk = 1)
+    KFCache(GrowableArray(zeros(p,p)), 
+            GrowableArray(zeros(p,p)), 
+            GrowableArray(zeros(p)),             
+            Array{Float64}(p),
+            Array{Float64}(p),
+            Array{Float64}(p, p),  # C
+            Array{Float64}(m, p),  # M
+            Array{Float64}(p, p),  # ZM
+            Array{Float64}(m, p),  # TM
+            Array{Float64}(m, p),  # K
+            Array{Float64}(m, m),  # KZ
+            Array{Float64}(m, m),  # KZp
+            Array{Float64}(m, m),  # TPL
+            Array{Float64}(m, m),   # L
+            Array{Float64}(p),     # a′
+            Array{Float64}(m, m)   # P′
+            )
 end 
 
-function KFCache(T::AbstractFloat, p::Int)
+function KFCache(T::AbstractFloat, p::Int, m::Int)
     @assert p==1 "Something wrong"
-    KFCache(GrowableArray(zero(T)), GrowableArray(zero(T)), GrowableArray(zero(eltype(T))))
+    KFCache(GrowableArray(zero(T)), 
+            GrowableArray(zero(T)), 
+            GrowableArray(zero(eltype(T))), 
+            Array{Float64}(1),
+            Array{Float64}(1),
+            Array{Float64}(1, 1),  # C
+            Array{Float64}(1, 1),  # M
+            Array{Float64}(1, 1),  # ZM
+            Array{Float64}(1, 1),  # TM
+            Array{Float64}(1, 1),  # K
+            Array{Float64}(1, 1),  # KZ
+            Array{Float64}(1, 1),  # KZp
+            Array{Float64}(1, 1),  # TPL
+            Array{Float64}(1, 1),  # L            
+            Array{Float64}(1, 1),  # a            
+            Array{Float64}(1, 1)  # P            
+            )
 end 
 
 
-struct LinearStateSpace{P<:KFParms, F<:KFFiltered, S<:KFSmoothed,  I<:KFInitVal, C<:KFCache, L<:Array, N<:Base.RefValue{Int64}}
-    p::P
-    f::F
-    s::S
-    i::I
-    c::C
-    loglik::L
-    t::N        
-end
 
-function LinearStateSpace(Z::A, H::D, T::A, R::B, Q::A, a1::AZ, P1::PZ; P1inf::Union{Void, PZ}=nothing) where {A, D, B, AZ, PZ}
-    @assert isa(P1, A) "P1 must be of type $(typeof(Z))"
+function LinearStateSpace(Z::ZT, H::HT, T::TT, R::RT, Q::QT, a1::AZ, P1::PZ; P1inf::Union{Void, PZ}=nothing) where {ZT, HT, TT, RT, QT, AZ, PZ}
+    @assert isa(P1, TT) "P1 must be of type $(typeof(TT))"
     if isa(Z, AbstractMatrix)
         @assert isa(a1, AbstractVector) "a1 must be of type Vector"
     elseif isa(Z, AbstractFloat)
@@ -156,184 +123,21 @@ function LinearStateSpace(Z::A, H::D, T::A, R::B, Q::A, a1::AZ, P1::PZ; P1inf::U
     #checksizes(Z, H, T, R, Q, α0, P1)
     m = numstates(T)::Int64
     p = nummeasur(Z)::Int64
-    # a = GrowableArray(a1)
-    # P = GrowableArray(P1)
     params = KFParms(Z, H, T, R, Q)
     filter = KFFiltered(a1, P1, P1inf)
     smooth = KFSmoothed(Array{Float64}(1,1), Array{Float64}(1,1,1), 
                         Array{Float64}(1,1), Array{Float64}(1,1,1))
     inival = KFInitVal(a1, P1)
-    caches = KFCache(T, p)
+    caches = KFCache(T, p, m)
     LinearStateSpace(params, filter, smooth, inival, caches, [0.0], Ref(1))
 end
 
-#=============
-Filter methods
-==============#
-
-#=-
-A. Covariance Filter
--=#
-
-function onlinefilter!(ss::LinearStateSpace, y)
-    hasdiffended = first(ss.f.hasdiffended)::Bool
-    onlinefilterstep!(ss, y, Val{!hasdiffended})
-    ss.t[] += 1
-    nothing
-end
-
-function onlinefilter_set!(ss::LinearStateSpace, y, offset::Int)
-    hasdiffended = first(ss.f.hasdiffended)::Bool
-    onlinefilterstep_set!(ss, y, offset, Val{!hasdiffended})
-    ss.t[] += 1
-    nothing
-end
-
-function Base.filter!(ss::LinearStateSpace{KFP} where KFP<:KFParms{A}, Y::Vector) where A<:AbstractFloat
-    (T, p, m, r, offset) = Filthy.checkfilterdataconsistency(ss, Y)
-    #rY = reshape(Y, (p, T))
-    Filthy.resizecontainer!(ss, T+offset)
-    for j in 1:length(Y)
-        onlinefilter_set!(ss, Y[j], offset)
-    end
-end
-
-function Base.filter!(ss::LinearStateSpace{KFP} where KFP<:KFParms{A}, Y::Matrix) where A<:AbstractArray
-    (T, p, m, r, offset) = Filthy.checkfilterdataconsistency(ss, Y)
-    #rY = reshape(Y, (p, T))
-    Filthy.resizecontainer!(ss, T+offset)
-    for j in 1:size(Y, 2)
-        onlinefilter_set!(ss, Y[:,j], offset)
-    end
-end
-
-function storepush!(ss, a, P, v, F, F⁻¹, Pinf, Pstar, y, flag)
-    push!(ss.f.a, a)
-    push!(ss.f.P, P)
-    push!(ss.c.F⁻¹, F⁻¹)
-    push!(ss.c.F, F)
-    push!(ss.c.Y, y)
-    push!(ss.f.Pinf, Pinf)
-    push!(ss.f.Pstar, Pstar)
-    ss.f.d[1] += 1
-    push!(ss.f.flagF, flag)
-    nothing
-end
-
-function storepush!(ss, a, P, v, F, F⁻¹, y)
-    push!(ss.f.a, a)
-    push!(ss.f.P, P)
-    push!(ss.c.F⁻¹, F⁻¹)
-    push!(ss.c.F, F)
-    push!(ss.c.Y, y)
-    nothing
-end
-
-function storeset!(ss, a, P, v, F, F⁻¹, Pinf, Pstar, y, offset, flag)
-    idx = ss.t[] + offset
-    ss.f.a[idx]    = a
-    ss.f.P[idx]    = P
-    ss.c.F⁻¹[idx]  = F⁻¹
-    ss.c.F[idx]    = F
-    ss.c.Y[idx]    = y
-    push!(ss.f.Pinf, Pinf)
-    push!(ss.f.Pstar, Pstar)
-    ss.f.d[1] += 1
-    push!(ss.f.flagF, flag)
-    nothing
-end
-
-function storeset!(ss, a, P, v, F, F⁻¹, y, offset)
-    idx = ss.t[] + offset
-    ss.f.a[idx] = a
-    ss.f.P[idx] = P
-    ss.c.F⁻¹[idx] = F⁻¹
-    ss.c.F[idx] = F
-    ss.c.Y[idx] = y
-    # s = loglikpart(v, F, F⁻¹)
-    # p, _ = size(ss.p)
-    # ss.loglik[1] += - p/2*log(2π) - s
-    nothing
-end
 
 
-function onlinefilterstep!(ss::LinearStateSpace, y, v::Type{Val{false}})
-    a, P = currentstate(ss, Val{false})
-    @unpack Z, H, T, R, Q = ss.p
-    a′, P′, v, F, F⁻¹ = filterstep(a, P, Z, H, T, R, Q, y)
-    storepush!(ss, a′, P′, v, F, F⁻¹, y)
-end
+                
 
-function onlinefilterstep!(ss::LinearStateSpace, y, v::Type{Val{true}})
-    a, P, Pinf, Pstar = currentstate(ss, Val{true})
-    @unpack Z, H, T, R, Q = ss.p
-    a′, P′, v, F, F⁻¹, Pinf′, Pstar′, flag = filterstep(a, P, Pinf, Pstar, Z, H, T, R, Q, y)    
-    ss.f.hasdiffended[1] = norm(Pinf′) <= 1e-08
-    storepush!(ss, a′, P′, v, F, F⁻¹, Pinf′, Pstar′, y, flag)                
-end
 
-function onlinefilterstep_set!(ss::LinearStateSpace, y, offset, v::Type{Val{false}})
-    a, P = currentstate(ss, Val{false})
-    @unpack Z, H, T, R, Q = ss.p
-    a′, P′, v, F, F⁻¹ = filterstep(a, P, Z, H, T, R, Q, y)
-    storeset!(ss, a′, P′, v, F, F⁻¹, y, offset)
-    updatelik!(ss, v, F, F⁻¹)
-end
 
-function onlinefilterstep_set!(ss::LinearStateSpace, y, offset, v::Type{Val{true}})
-    a, P, Pinf, Pstar = currentstate(ss, Val{true})
-    @unpack Z, H, T, R, Q = ss.p
-    a′, P′, v, F, F⁻¹, Pinf′, Pstar′, flag = filterstep(a, P, Pinf, Pstar, Z, H, T, R, Q, y)    
-    ss.f.hasdiffended[1] = norm(Pinf′) <= 1e-06
-    storeset!(ss, a′, P′, v, F, F⁻¹, Pinf′, Pstar′, y, offset, flag)
-    updatelik!(ss, v, F, F⁻¹, flag)
-end
-
-function filterstep(a::AA, P::PP, Z, H, T, R, Q, y) where {AA, PP}
-    ## Non-diffuse step
-    v = y .- Z*a
-    F = Z*P*Z' .+ H    
-    Finv = inv(F)
-    K = T*P*Z'*Finv
-    L = T.-K*Z
-    a′ = T*a .+ K*v
-    P′ = T*P*L' .+ R*Q*R'
-    (a′, P′, v, F, Finv)
-end
-
-function filterstep(a, P, Pinf, Pstar, Z, H, T, R, Q, y)
-    Finf = Z*Pinf*Z'
-    (Fflag, Finfinv) = Filthy.safeinverse(Finf)    
-    diffusefilterstep(a, P, Pinf, Pstar, Finf, Finfinv, Z, H, T, R, Q, y, Val{Fflag})    
-end
-
-function diffusefilterstep(a, P, Pinf, Pstar, Finf, Finfinv, Z, H, T, R, Q, y, ::Type{Val{1}})
-    ## Finf is invertible
-    v     = y .- Z*a
-    Kinf  = T*Pinf*Z'*Finfinv
-    Linf  = T - Kinf*Z 
-    Fstar = Z*Pstar*Z' + H
-    Kstar = (T*Pstar*Z' + Kinf*Fstar)*Finfinv
-    a′     = T*a + Kinf*v
-    Pinf′  = T*Pinf*Linf' 
-    Pstar′ = T*Pstar*Linf' + Kinf*Finf*Kstar' + R*Q*R'
-    P′     = Pstar′
-    (a′, P′, v, Finf, Finfinv, Pinf′, Pstar′, 1)
-end
-
-function diffusefilterstep(a, P, Pinf, Pstar, Finf, Finfinv, Z, H, T, R, Q, y, ::Type{Val{0}})
-    ## Finf is not > 0
-    v     = y - Z*a        
-    Fstar = Z*Pstar*Z' + H
-    Fstarinv = inv(Fstar)  
-    Kstar = T*Pstar*Z'*Fstarinv
-    Lstar = T - Kstar*Z 
-    a′     = T*a + Kstar*v
-    Pinf′  = T*Pinf*T' 
-    Pstar′ = T*Pstar*Lstar' + R*Q*R'
-    P′     = Pstar′
-    (a′, P′, v, Fstar, Fstarinv, Pinf′, Pstar′, 0)
-end
 
 function smooth!(ss::LinearStateSpace)
     n = ss.t[]::Int64
@@ -455,80 +259,63 @@ function fastloglikscalar(Z::FF, H::FF, T::FF, R::FF, Q::FF, a1::G, P1::G, P1inf
     ll + c
 end
 
-
-# function futil_callback(s::OptimSSM, callback::Function = identiy, theta)    
-#     @unpack a1, P1, P1inf, Pstar = s
-#     Z = similar(theta, size(s.Z))
-#     H = similar(theta, size(s.H))
-#     T = similar(theta, size(s.T))
-#     R = similar(theta, size(s.R))
-#     Q = similar(theta, size(s.Q))
-#     ## H and Q are the chol 
-#     remask!(s.m, (Z, H, T, R, Q), theta)
-#     if callback!(s, theta)
-#       -fastloglik(Z, H*H', T, R, Q*Q', a1, P1, P1inf, Pstar, s.y)
-#     else
-#       +Inf
-#     end
-# end
-
-
-function futil(s::OptimSSM, theta)    
-    @unpack a1, P1, P1inf, Pstar = s
-    Z = similar(theta, size(s.Z))
-    H = similar(theta, size(s.H))
-    T = similar(theta, size(s.T))
-    R = similar(theta, size(s.R))
-    Q = similar(theta, size(s.Q))
+function ssm_obj_fun(s::SSMOptim, theta)
+    Z, H, T, R, Q, a1, P1, P1inf, Pstar = get_parameters(s, eltype(theta))    
     ## H and Q are the chol 
     remask!(s.m, (Z, H, T, R, Q), theta)    
-    -fastloglik(Z, H*H', T, R, Q*Q', a1, P1, P1inf, Pstar, s.y)
+    try
+        s.p.a1!(s, a1)
+        s.p.P1!(s, P1)
+        fastloglik(Z, H*H', T, R, Q*Q', a1, P1, P1inf, Pstar, s.Y)
+    catch
+        -Inf
+    end    
 end
 
-function futil2(s::OptimSSM, theta)    
-    @unpack a1, P1, P1inf, Pstar, Z, H, T, R, Q = s
-    remask!(s.m, (Z, H, T, R, Q), theta)
-    ## H and Q are the chol 
-    ## Missed optimization: Q*Q' and H*H' could be done 
-    ## in place A_mul_bt! --- adding a field to OptimSSM
-    -fastloglik(Z, H*H', T, R, Q*Q', a1, P1, P1inf, Pstar, s.y)
-end
-
-
-function futil_scalar(s::OptimSSMScalar, theta)    
+function ssm_obj_fun_scalar(s::OptimSSMScalar, theta)    
     @unpack a1, P1, P1inf, Pstar, idx, par, y = s
     x = similar(theta, length(par))
     copy!(x, par)
     x[idx] = theta
     -fastloglikscalar(x[1], exp(x[2]), x[3], x[4], exp(x[5]), a1, P1, P1inf, Pstar, y)
 end
+"""
+fit(Z::A, CH::A, T::A, R::A, CQ::A, a1::AZ, P1::PZ, P1inf::PW, Y, start, lower, upper) where {A<:AbstractMatrix, AZ<:Union{Function, AbstractVector}, PZ<:Union{Function, AbstractMatrix}, PW}
 
-function fit(::Type{LinearStateSpace}, Z::A, CH::A, T::A, R::A, CQ::A, a1::AZ, P1::PZ, P1inf::PZ, Y, start, lower, upper) where {A<:AbstractMatrix, AZ<:AbstractVector, PZ<:AbstractMatrix}
+"""
+function fit(::Type{LinearStateSpace}, Z::A, CH::A, T::A, R::A, CQ::A, a1!::Function, 
+            P1!::Function, P1inf::PINF, Y, x0, lower, upper, solver = IpoptSolver()) where {A<:AbstractMatrix, PINF}
     @assert islowertriangular(CH) "CH must be lower triangular"
     @assert islowertriangular(CQ) "CQ must be lower triangular"
-    Z₀, CH₀, T₀, R₀, CQ₀ = map(obj-> convert(Matrix, obj), (Z, CH, T, R, CQ))
+    Z₀, CH₀, T₀, R₀, CQ₀ = map(obj-> convert(Matrix, obj), (copy(Z), copy(CH), copy(T), copy(R), copy(CQ)))
     mask = Masked((Z₀, CH₀, T₀, R₀, CQ₀))
-    allfixed(mask) && return LinearStateSpaceModel(Z, CH*CH', T, R, CQ*CQ', a1, P1, P1inf)
+    allfixed(mask) && (print_with_color(:cyan, "All State Space parameters are defined."); return nothing)
     ## Setup and do maximum likelihood
-    ## Copy matrices to Matrix{Float64}        
-    a, P, Pstar = setupdiffusematrices(a1, P1, P1inf)
-    fitobj = OptimSSM(mask, Z₀, CH₀, T₀, R₀, CQ₀, a, P, P1inf, Pstar, Y)
-    f(x) = futil(fitobj, x)::Float64
-    d = Optim.OnceDifferentiable(f, start, autodiff = :forward)
-    out = Optim.optimize(d, start, lower, upper, Fminbox{BFGS}())
-    remask!(mask, (Z₀, CH₀, T₀, R₀, CQ₀), Optim.minimizer(out))
+    ## Copy matrices to Matrix{Float64}
+    a1m = Array{eltype(Z), 1}(size(T,1))
+    P1m = Array{eltype(Z), 2}(size(R, 1), size(R, 1))
+    a, P, Pstar = setupdiffusematrices(a1m, P1m, P1inf)
+    #fitobj = OptimSSM(mask, Z₀, CH₀, T₀, R₀, CQ₀, a, P,  P1inf, Pstar, Y)
+    s = SSMOptim(mask, Z₀, CH₀, T₀, R₀, CQ₀, a, P, a1!, P1!, P1inf, Pstar, Y)
+    m = MathProgBase.NonlinearModel(solver)
+    MathProgBase.loadproblem!(m, length(x0), 0, lower, upper, Array{Float64}(0), Array{Float64}(0),  :Max, s)
+    MathProgBase.setwarmstart!(m, x0)
+    MathProgBase.optimize!(m)
+    sol = MathProgBase.getsolution(m)
+    remask!(mask, (Z₀, CH₀, T₀, R₀, CQ₀), sol)
     ZZ = SMatrix{size(Z)...}(Z₀)
     HH = SMatrix{size(CH)...}(CH₀*CH₀')
     TT = SMatrix{size(T)...}(T₀)    
     RR = SMatrix{size(R₀)...}(R₀)
     QQ = SMatrix{size(CQ)...}(CQ₀*CQ₀')
-    aa = SVector{length(a1)}(fitobj.a1)
-    PP = SMatrix{size(P1)...}(fitobj.P1)
-    PPinf = SMatrix{size(P1)...}(fitobj.P1inf)    
-    LinearStateSpace(ZZ, HH, TT, R, QQ, aa, PP, P1inf=PPinf)
+    aa = SVector{length(a)}(s.p.a1)
+    PP = SMatrix{size(P)...}(s.p.P1)
+    PPinf = SMatrix{size(P)...}(s.p.P1inf)
+    LinearStateSpace(ZZ, HH, TT, RR, QQ, aa, PP, P1inf=PPinf)
 end
 
-
+function fit!(ss::LinearStateSpace, Y, x0, lower, upper, solver)
+end
 
 function fit(::Type{LinearStateSpace}, Z::A, H::A, T::A, R::B, Q::A, a1::AZ, P1::PZ, P1inf::PZ, Y, start) where {A<:AbstractFloat, B, AZ<:AbstractFloat, PZ<:AbstractFloat}
     @assert !((P1inf != zero(P1inf)) && (P1inf != one(P1inf))) "P1inf must be either 1.0 or 0.0"
@@ -592,8 +379,8 @@ end
 loglik(cf) = cf.loglik[]::Float64
 
 
-include("methods.jl")
 
-export LinearStateSpace, simulate, filter!, smooth!, fit, reset!
+
+export LinearStateSpace, simulate, filter!, smooth!, fit, reset!, get_parameters
 
 end # module

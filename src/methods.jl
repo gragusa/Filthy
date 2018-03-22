@@ -47,6 +47,10 @@ numstates(a::AbstractFloat) = 1
 nummeasur(a::AbstractArray) = size(a,1)
 nummeasur(a::AbstractFloat) = 1
 
+numr(a::AbstractArray) = size(a,2)
+numr(a::AbstractFloat) = 1
+
+
 Base.size(cf::LinearStateSpace) = size(cf.p)
 
 Base.size(p::KFParms{P}) where P<:AbstractFloat = (1,1,1)
@@ -170,6 +174,42 @@ end
     (a1′::T, P1′::M, Pstar::M)
 end
 
+function solve_discrete_lyapunov(A::AbstractMatrix{T},
+    B::AbstractMatrix{T}, max_it::Int=50) where T<:Real
+    # TODO: Implement Bartels-Stewardt
+    n = size(A, 2)
+    alpha0 = reshape([A;], n, n)
+    gamma0 = reshape([B;], n, n)
+
+    alpha1 = similar(alpha0)
+    gamma1 = similar(gamma0)
+    gamma  = similar(gamma0)
+    diff = 5
+    n_its = 1
+
+    while diff > 1e-15
+        A_mul_B!(alpha1, alpha0, alpha0)
+        A_mul_B!(gamma1, alpha0, gamma0)
+        A_mul_Bt!(gamma, gamma1, alpha0)
+        gamma1 .= gamma0 .+ gamma
+        #gamma1 = gamma0 + alpha0*gamma0*alpha0'
+        diff = maximum(abs, gamma)
+        copy!(alpha0, alpha1)
+        copy!(gamma0, gamma1)
+        n_its += 1
+        if n_its > max_it
+        error("Exceeded maximum iterations, check input matrices")
+        end
+    end
+
+    return gamma1
+end
 
 
+function Base.show(io::IO, ::MIME"text/plain", ss::LinearStateSpace)    
+    id = size(ss)
+    print(io, "Linear State Space model, $id")
+end
     
+
+
