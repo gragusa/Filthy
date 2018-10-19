@@ -1,13 +1,14 @@
-using Revise,Filthy
-using Base.Test
+using Filthy
+using Test
 using StaticArrays
 using BenchmarkTools
+using CSV
 
 #=
 Nile data
 -==========================#
 
-nile = readcsv("Nile.csv")
+nile = CSV.read("Nile.csv")
 
 
 
