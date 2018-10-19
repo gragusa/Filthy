@@ -1,7 +1,9 @@
-using Revise,Filthy
-using Base.Test
+using Filthy
+using Test
 using StaticArrays
 using BenchmarkTools
+using CSV
+using Plots
 
 # m = 2   # Dinemsion of state
 # p = 2   # Dinemsion of measurements
@@ -47,7 +49,7 @@ using BenchmarkTools
 ## Y    = Zt αt + ϵt, ϵt ∼ N(0, Ht)
 ## αt+1 = Tt αt + Rt ηt, ηt ~ N(0, Qt)
 
-nile = readcsv("Nile.csv")
+nile = CSV.read("Nile.csv")
 Zn = fill(1.0, (1,1))
 Hn = fill(15099., (1,1))
 Rn = fill(1.0, (1,1))
