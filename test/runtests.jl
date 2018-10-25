@@ -1,14 +1,15 @@
-using Revise,Filthy
-using Base.Test
+using Filthy
+using Test
 using StaticArrays
 using BenchmarkTools
-
+using CSV
 #=
 Nile data
 -==========================#
 
-nile = readcsv("Nile.csv")
+nile = CSV.read("Nile.csv", allowmissing=:none)
 
+nile = Matrix(nile)
 
 
 # Values from Durbin and Koopman
@@ -40,52 +41,52 @@ Qs = SMatrix{1,1}(Qn)
 Constructors
 =----------=#
 @testset "Constructors (inexact).........." begin
-    @test isa(LinearStateSpace(1.0, 15099.82, 1.0, 1.0, 1469.1, 0.0, 10.^7.), LinearStateSpace)
-    @test isa(LinearStateSpace(Zn, Hn, Tn, Rn, Qn, [0.0], fill(10.^7., (1,1))), LinearStateSpace)
-    @test isa(LinearStateSpace(Zs, Hs, Ts, Rs, Qs, SVector{1}(0.0), SMatrix{1,1}(fill(10.^7., (1,1)))), LinearStateSpace)
+    @test isa(LinearStateSpace(1.0, 15099.82, 1.0, 1.0, 1469.1, 0.0, 10.0^7), LinearStateSpace)
+    @test isa(LinearStateSpace(Zn, Hn, Tn, Rn, Qn, [0.0], fill(10.0^7, (1,1))), LinearStateSpace)
+    @test isa(LinearStateSpace(Zs, Hs, Ts, Rs, Qs, SVector{1}(0.0), SMatrix{1,1}(fill(10.0^7, (1,1)))), LinearStateSpace)
 
-    @test_throws AssertionError LinearStateSpace(Zn, Hn, Tn, Rn, Qn, 0.0, fill(10.^7., (1,1)))
-    @test_throws AssertionError LinearStateSpace(Zn, Hn, Tn, Rn, Qn, [0.0], 10.^7.)
-    @test_throws AssertionError LinearStateSpace(Zn, Hn, Tn, Rn, Qn, 0.0, 10.^7.)
+    @test_throws AssertionError LinearStateSpace(Zn, Hn, Tn, Rn, Qn, 0.0, fill(10.0^7, (1,1)))
+    @test_throws AssertionError LinearStateSpace(Zn, Hn, Tn, Rn, Qn, [0.0], 10.0^7)
+    @test_throws AssertionError LinearStateSpace(Zn, Hn, Tn, Rn, Qn, 0.0, 10.0^7)
 
     @test_throws AssertionError LinearStateSpace(Zs, Hs, Ts, Rs, Qs, SMatrix{1,1}([0.0]), rand(1,1))
-    @test_throws AssertionError LinearStateSpace(Zs, Hs, Ts, Rs, Qs, SMatrix{1,1}([0.0]), SMatrix{1,1}(fill(10.^7., (1,1))))
+    @test_throws AssertionError LinearStateSpace(Zs, Hs, Ts, Rs, Qs, SMatrix{1,1}([0.0]), SMatrix{1,1}(fill(10.0^7, (1,1))))
     @test_throws AssertionError LinearStateSpace(Zs, Hs, Ts, Rs, Qs, SVector{1}(0.0), rand(1,1))
 
-    @test_throws AssertionError LinearStateSpace(1.0, 15099.82, 1.0, 1.0, 1469.1, [0.0], 10.^7.)
-    @test_throws AssertionError LinearStateSpace(1.0, 15099.82, 1.0, 1.0, 1469.1, 0.0, [10.^7.])
-    @test_throws AssertionError LinearStateSpace(1.0, 15099.82, 1.0, 1.0, 1469.1, [0.0], [10.^7.])
+    @test_throws AssertionError LinearStateSpace(1.0, 15099.82, 1.0, 1.0, 1469.1, [0.0], 10.0^7)
+    @test_throws AssertionError LinearStateSpace(1.0, 15099.82, 1.0, 1.0, 1469.1, 0.0, [10.0^7])
+    @test_throws AssertionError LinearStateSpace(1.0, 15099.82, 1.0, 1.0, 1469.1, [0.0], [10.0^7])
 end
 
 @testset "Constructors (exact).........." begin
-    @test isa(LinearStateSpace(1.0, 15099.82, 1.0, 1.0, 1468.487, 0.0, 10.^7., Pinf = 1.0), LinearStateSpace)
-    @test isa(LinearStateSpace(Zn, Hn, Tn, Rn, Qn, [0.0], fill(10.^7., (1,1)), Pinf = fill(1.0, (1,1))), LinearStateSpace)
-    @test isa(LinearStateSpace(Zs, Hs, Ts, Rs, Qs, SVector{1}(0.0), SMatrix{1,1}(fill(10.^7., (1,1)))), LinearStateSpace)
-    
-    ss = LinearStateSpace(Zs, Hs, Ts, Rs, Qs, SVector{1}(0.0), SMatrix{1,1}(fill(10.^7., (1,1))), Pinf = SMatrix{1,1}([1.0]))
+    @test isa(LinearStateSpace(1.0, 15099.82, 1.0, 1.0, 1468.487, 0.0, 10.0^7, P1inf = 1.0), LinearStateSpace)
+    @test isa(LinearStateSpace(Zn, Hn, Tn, Rn, Qn, [0.0], fill(10.0^7, (1,1)), P1inf = fill(1.0, (1,1))), LinearStateSpace)
+    @test isa(LinearStateSpace(Zs, Hs, Ts, Rs, Qs, SVector{1}(0.0), SMatrix{1,1}(fill(10.0^7, (1,1)))), LinearStateSpace)
+
+    ss = LinearStateSpace(Zs, Hs, Ts, Rs, Qs, SVector{1}(0.0), SMatrix{1,1}(fill(10.0^7, (1,1))), P1inf = SMatrix{1,1}([1.0]))
     @test isa(ss.f.Pinf[1], StaticArrays.SArray{Tuple{1,1},Float64,2,1})
     @test isa(ss.f.Pstar[1], StaticArrays.SArray{Tuple{1,1},Float64,2,1})
     @test ss.f.Pinf[1][1] == 1.0
     @test ss.f.Pstar[1][1] == 0.0
 
-    ss = LinearStateSpace(Zn, Hn, Tn, Rn, Qn, [0.0], fill(10.^7., (1,1)), Pinf = fill(1.0, (1,1)))
+    ss = LinearStateSpace(Zn, Hn, Tn, Rn, Qn, [0.0], fill(10.0^7, (1,1)), P1inf = fill(1.0, (1,1)))
     @test isa(ss.f.Pinf[1], Array{Float64, 2})
     @test isa(ss.f.Pstar[1], Array{Float64, 2})
     @test ss.f.Pinf[1][1] == 1.0
     @test ss.f.Pstar[1][1] == 0.0
-    
-    ss = LinearStateSpace(1.0, 15099.82, 1.0, 1.0, 1468.487, 0.0, 10.^7., Pinf = 1.0)
+
+    ss = LinearStateSpace(1.0, 15099.82, 1.0, 1.0, 1468.487, 0.0, 10.0^7, Pinf = 1.0)
     @test isa(ss.f.Pinf[1], Float64)
     @test isa(ss.f.Pstar[1], Float64)
     @test ss.f.Pinf[1][1] == 1.0
     @test ss.f.Pstar[1][1] == 0.0
 
-    # @test_throws AssertionError LinearStateSpace(Zn, Hn, Tn, Rn, Qn, 0.0, fill(10.^7., (1,1)))
-    # @test_throws AssertionError LinearStateSpace(Zn, Hn, Tn, Rn, Qn, [0.0], 10.^7.)
-    # @test_throws AssertionError LinearStateSpace(Zn, Hn, Tn, Rn, Qn, 0.0, 10.^7.)
+    # @test_throws AssertionError LinearStateSpace(Zn, Hn, Tn, Rn, Qn, 0.0, fill(10.0^7, (1,1)))
+    # @test_throws AssertionError LinearStateSpace(Zn, Hn, Tn, Rn, Qn, [0.0], 10.0^7)
+    # @test_throws AssertionError LinearStateSpace(Zn, Hn, Tn, Rn, Qn, 0.0, 10.0^7)
 
     # @test_throws AssertionError LinearStateSpace(Zs, Hs, Ts, Rs, Qs, SMatrix{1,1}([0.0]), rand(1,1))
-    # @test_throws AssertionError LinearStateSpace(Zs, Hs, Ts, Rs, Qs, SMatrix{1,1}([0.0]), SMatrix{1,1}(fill(10.^7., (1,1))))
+    # @test_throws AssertionError LinearStateSpace(Zs, Hs, Ts, Rs, Qs, SMatrix{1,1}([0.0]), SMatrix{1,1}(fill(10.0^7, (1,1))))
     # @test_throws AssertionError LinearStateSpace(Zs, Hs, Ts, Rs, Qs, SVector{1}(0.0), rand(1,1))
 
     # @test_throws AssertionError LinearStateSpace(1.0, 15099.82, 1.0, 1.0, 1468.487, [0.0], 10.^7.)
@@ -95,16 +96,16 @@ end
 end
 
 
-#= 
+#=
 Online version
 =#
 
-ss_scalar = LinearStateSpace(1.0, 15099.82, 1.0, 1.0, 1468.487, 0.0, 10.^7.)
+ss_scalar = LinearStateSpace(1.0, 15099.82, 1.0, 1.0, 1468.487, 0.0, 10.0^7)
 for j in eachindex(nile)
     Filthy.onlinefilter!(ss_scalar, nile[j])
 end
 
-ss_matrix = LinearStateSpace(Zn, Hn, Tn, Rn, Qn, [0.0], fill(10.^7., (1,1)))
+ss_matrix = LinearStateSpace(Zn, Hn, Tn, Rn, Qn, [0.0], fill(10.0^7, (1,1)))
 for j in eachindex(nile)
     Filthy.onlinefilter!(ss_matrix, nile[j,:])
 end
@@ -151,10 +152,10 @@ end
 Vectorized version
 =#
 
-ss_scalar = LinearStateSpace(1.0, 15099.82, 1.0, 1.0, 1468.487, 0.0, 10.^7.)
+ss_scalar = LinearStateSpace(1.0, 15099.82, 1.0, 1.0, 1468.487, 0.0, 10.0^7.)
 Filthy.filter!(ss_scalar, vec(nile))
 
-ss_matrix = LinearStateSpace(Zn, Hn, Tn, Rn, Qn, [0.0], fill(10.^7., (1,1)))
+ss_matrix = LinearStateSpace(Zn, Hn, Tn, Rn, Qn, [0.0], fill(10.0^7, (1,1)))
 Filthy.filter!(ss_matrix, nile')
 
 ss_static = LinearStateSpace(Zs, Hs, Ts, Rs, Qs, SVector{1}(0.0), SMatrix{1,1}(fill(10.^7., (1,1))))
@@ -195,7 +196,7 @@ Qs = SMatrix{1,1}(Qn)
 
 
 
-ss = LinearStateSpace(Zs, Hs, Ts, Rs, Qs, SVector{1}(0.0), SMatrix{1,1}(fill(0., (1,1))), Pinf = SMatrix{1,1}([1.0]))
+ss = LinearStateSpace(Zs, Hs, Ts, Rs, Qs, SVector{1}(0.0), SMatrix{1,1}(fill(0., (1,1))), P1inf = SMatrix{1,1}([1.0]))
 Filthy.filter!(ss, nile')
 
 @testset "Filter correctness (offline) [exact]....." begin
@@ -227,20 +228,20 @@ end
 
 
 
-# # stat_online = @btime begin 
+# # stat_online = @btime begin
 # #     cf_static = Filthy.CovarianceFilter(Zs, Hs, Ts, Rs, Qs, SMatrix{1,1}([0.0]), SMatrix{1,1}(fill(10.^7., (1,1))))
 # #     for j in eachindex(nile)
 # #         filter!(cf_static, [nile[j]])
 # #     end
 # # end
 
-# # stat_vec = @btime begin 
-# #     cf_static = Filthy.CovarianceFilter(Zs, Hs, Ts, Rs, Qs, SMatrix{1,1}([0.0]), SMatrix{1,1}(fill(10.^7., (1,1))))    
-# #     filter!(cf_static, nile)    
+# # stat_vec = @btime begin
+# #     cf_static = Filthy.CovarianceFilter(Zs, Hs, Ts, Rs, Qs, SMatrix{1,1}([0.0]), SMatrix{1,1}(fill(10.^7., (1,1))))
+# #     filter!(cf_static, nile)
 # # end
 
 
-# # @btime begin 
+# # @btime begin
 # #     cf_matrix = Filthy.CovarianceFilter(Zn, Hn, Tn, Rn, Qn, [0.0], fill(10.^7., (1,1)))
 # #     for j in eachindex(nile)
 # #         filter!(cf_matrix, [nile[j]])
@@ -311,7 +312,7 @@ end
 
 # # vv = @btime begin
 # #     cf = CovarianceFilter(Zp, Hp, Tp, Rp, Qp, SVector{2}(zeros(2)), SMatrix{2,2}(eye(2)))
-# #     filter!(cf, Y')    
+# #     filter!(cf, Y')
 # # end
 
 
@@ -378,21 +379,21 @@ end
 
 
 
-# # scalar_online = @btime begin 
+# # scalar_online = @btime begin
 # #     cf_scalar = LinearStateSpace(1.0, 15099., 1.0, 1.0, 1469.1, 0.0, 10.^7.)
 # #     for j in eachindex(nile)
 # #         Filthy.onlinefilter!(cf_scalar, nile[j])
 # #     end
 # # end
 
-# # stat_online = @btime begin 
+# # stat_online = @btime begin
 # #     cf_static = LinearStateSpace(Zs, Hs, Ts, Rs, Qs, SMatrix{1,1}([0.0]), SMatrix{1,1}(fill(10.^7., (1,1))))
 # #     for j in eachindex(nile)
 # #         Filthy.onlinefilter!(cf_static, nile[j,:])
 # #     end
 # # end
 
-# # matrix_online = @btime begin 
+# # matrix_online = @btime begin
 # #     ss_matrix = LinearStateSpace(Zn, Hn, Tn, Rn, Qn, [0.0], fill(10.^7., (1,1)))
 # #     for j in eachindex(nile)
 # #         Filthy.onlinefilter!(ss_matrix, nile[j,:])

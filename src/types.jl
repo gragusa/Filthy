@@ -4,13 +4,13 @@ struct KFParms{Zt, Ht, Tt, Rt, Qt}
     T::Tt
     R::Rt
     Q::Qt
-end 
+end
 
-mutable struct KFFiltered{AT, PT, PI}
+mutable struct KFFiltered{AT, PT, PI, PIX}
     a::AT
     P::PT
     Pstar::PI
-    Pinf::PI
+    Pinf::PIX
     d::Array{Int,1}
     flagF::Array{Int, 1}
     hasdiffended::BitArray{1}
@@ -31,13 +31,13 @@ end
 struct KFCache{FF, FI, DD, T}
     F⁻¹::FF ##  (p x p)
     F::FI   ##  (p x p)
-    Y::DD   ##  (p) 
+    Y::DD   ##  (p)
     v::Array{T, 1}
     vp::Array{T, 1}
     C::Array{T, 2}
     M::Array{T, 2}
     ZM::Array{T, 2}
-    TM::Array{T, 2}    
+    TM::Array{T, 2}
     K::Array{T, 2}
     KZ::Array{T, 2}
     KZp::Array{T, 2}
@@ -54,7 +54,7 @@ struct LinearStateSpace{P<:KFParms, F<:KFFiltered, S<:KFSmoothed,  I<:KFInitVal,
     i::I
     c::C
     loglik::L
-    t::N        
+    t::N
 end
 
 
@@ -137,4 +137,3 @@ struct Masked{FREEIDX, FIXEDIDX, FREEITR, FIXEDITR, P}
     parent::P
     count::Array{Int64, 1}
 end
-

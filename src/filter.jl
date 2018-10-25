@@ -6,7 +6,7 @@ Filter methods
 A. Entry points
 -=#
 
-function Base.filter!(ss::LinearStateSpace{KFP} where KFP<:KFParms{A}, Y::Matrix) where A<:AbstractArray
+function Base.filter!(ss::LinearStateSpace{KFP} where KFP<:KFParms{A}, Y::B) where {A<:AbstractArray, B<:AbstractArray}
     (T, p, m, r, offset) = Filthy.checkfilterdataconsistency(ss, Y)
     #rY = reshape(Y, (p, T))
     Filthy.resizecontainer!(ss, T+offset)
@@ -43,26 +43,22 @@ function onlinefilterstep!(ss::LinearStateSpace, y, v::Type{Val{false}})
     a, P = currentstate(ss, Val{false})
     @unpack Z, H, T, R, Q = ss.p
     a′, P′, v, F, F⁻¹ = filterstep(a, P, Z, H, T, R, Q, y)
-    @show P′
     storepush!(ss, a′, P′, v, F, F⁻¹, y)
 end
 
 function onlinefilterstep!(ss::LinearStateSpace, y, v::Type{Val{true}})
     a, P, Pinf, Pstar = currentstate(ss, Val{true})
-    @show P
     @unpack Z, H, T, R, Q = ss.p
-    a′, P′, v, F, F⁻¹, Pinf′, Pstar′, flag = filterstep(a, P, Pinf, Pstar, Z, H, T, R, Q, y)    
-    @show P′
+    a′, P′, v, F, F⁻¹, Pinf′, Pstar′, flag = filterstep(a, P, Pinf, Pstar, Z, H, T, R, Q, y)
     ss.f.hasdiffended[1] = norm(Pinf′) <= 1e-08
-    storepush!(ss, a′, P′, v, F, F⁻¹, Pinf′, Pstar′, y, flag)                
+    storepush!(ss, a′, P′, v, F, F⁻¹, Pinf′, Pstar′, y, flag)
 end
 
 function onlinefilterstep_set!(ss::LinearStateSpace, y, offset, v::Type{Val{false}})
     a, P = currentstate(ss, Val{false})
     @unpack Z, H, T, R, Q = ss.p
-    @show P
     a′, P′, v, F, F⁻¹ = filterstep(a, P, Z, H, T, R, Q, y)
-    @show a′, P′, v, F, F⁻¹
+    #@show a′, P′, v, F, F⁻¹
     storeset!(ss, a′, P′, v, F, F⁻¹, y, offset)
     updatelik!(ss, v, F, F⁻¹)
 end
@@ -70,7 +66,7 @@ end
 function onlinefilterstep_set!(ss::LinearStateSpace, y, offset, v::Type{Val{true}})
     a, P, Pinf, Pstar = currentstate(ss, Val{true})
     @unpack Z, H, T, R, Q = ss.p
-    a′, P′, v, F, F⁻¹, Pinf′, Pstar′, flag = filterstep(a, P, Pinf, Pstar, Z, H, T, R, Q, y)    
+    a′, P′, v, F, F⁻¹, Pinf′, Pstar′, flag = filterstep(a, P, Pinf, Pstar, Z, H, T, R, Q, y)
     ss.f.hasdiffended[1] = norm(Pinf′) <= 1e-06
     storeset!(ss, a′, P′, v, F, F⁻¹, Pinf′, Pstar′, y, offset, flag)
     updatelik!(ss, v, F, F⁻¹, flag)
@@ -81,13 +77,13 @@ B. Actual steps
 -=#
 function filterstep(a, P, Pinf, Pstar, Z, H, T, R, Q, y)
     Finf = Z*Pinf*Z'
-    (Fflag, Finfinv) = Filthy.safeinverse(Finf)    
-    diffusefilterstep(a, P, Pinf, Pstar, Finf, Finfinv, Z, H, T, R, Q, y, Val{Fflag})    
+    (Fflag, Finfinv) = Filthy.safeinverse(Finf)
+    diffusefilterstep(a, P, Pinf, Pstar, Finf, Finfinv, Z, H, T, R, Q, y, Val{Fflag})
 end
 
 function filterstep(a::AA, P::PP, Z, H, T, R, Q, y) where {AA, PP}
     ## Non-diffuse step
-    v = y .- Z*a  
+    v = y .- Z*a
     F = Z*P*Z' .+ H
     Finv = inv(F)
     K = T*P*Z'*Finv
@@ -101,11 +97,11 @@ function diffusefilterstep(a, P, Pinf, Pstar, Finf, Finfinv, Z, H, T, R, Q, y, :
     ## Finf is invertible
     v     = y .- Z*a
     Kinf  = T*Pinf*Z'*Finfinv
-    Linf  = T - Kinf*Z 
+    Linf  = T - Kinf*Z
     Fstar = Z*Pstar*Z' + H
     Kstar = (T*Pstar*Z' + Kinf*Fstar)*Finfinv
     a′     = T*a + Kinf*v
-    Pinf′  = T*Pinf*Linf' 
+    Pinf′  = T*Pinf*Linf'
     Pstar′ = T*Pstar*Linf' + Kinf*Finf*Kstar' + R*Q*R'
     P′     = Pstar′
     (a′, P′, v, Finf, Finfinv, Pinf′, Pstar′, 1)
@@ -113,13 +109,13 @@ end
 
 function diffusefilterstep(a, P, Pinf, Pstar, Finf, Finfinv, Z, H, T, R, Q, y, ::Type{Val{0}})
     ## Finf is not > 0
-    v     = y - Z*a        
+    v     = y - Z*a
     Fstar = Z*Pstar*Z' + H
-    Fstarinv = inv(Fstar)  
+    Fstarinv = inv(Fstar)
     Kstar = T*Pstar*Z'*Fstarinv
-    Lstar = T - Kstar*Z 
+    Lstar = T - Kstar*Z
     a′     = T*a + Kstar*v
-    Pinf′  = T*Pinf*T' 
+    Pinf′  = T*Pinf*T'
     Pstar′ = T*Pstar*Lstar' + R*Q*R'
     P′     = Pstar′
     (a′, P′, v, Fstar, Fstarinv, Pinf′, Pstar′, 0)
@@ -132,7 +128,7 @@ end
 # -=#
 
 # # Standard filtering equation
-# function filterstep!(a′, P′, v, vp, C, M, ZM, TM, K, KZ, KZp, TPL, L, a::AA, P::PP, Z, H, T, R, Q, y) where {AA, PP} 
+# function filterstep!(a′, P′, v, vp, C, M, ZM, TM, K, KZ, KZp, TPL, L, a::AA, P::PP, Z, H, T, R, Q, y) where {AA, PP}
 #     ## v  is (p x 1)
 #     ## v′ is (p x 1)
 #     ## C is (p x p)
@@ -149,15 +145,15 @@ end
 #     A_mul_B!(vp, Z, a)
 #     @inbounds @simd for i in eachindex(v)
 #         v[i] = y[i] - vp[i]
-#     end 
+#     end
 #     ## [M]
 #     A_mul_Bt!(M, P, Z)
-#     ## [ZPZ'] -> ZM 
+#     ## [ZPZ'] -> ZM
 #     A_mul_B!(ZM, Z, M)
 #     ## [ZPZ' + H] -> C
 #     @inbounds @simd for i in eachindex(ZM)
 #         C[i] = ZM[i] + H[i]
-#     end 
+#     end
 #     Cinv = inv(factorize(C))
 #     ## [T*M] -> TM
 #     A_mul_B!(TM, T, M)
@@ -168,13 +164,13 @@ end
 #     ## [T-KZ] -> L
 #     @inbounds @simd for i in eachindex(L)
 #         L[i] = T[i] - KZ[i]
-#     end 
+#     end
 #     ## [T*a] -> Ta
 #     A_mul_B!(a′, T, a)
 #     A_mul_B!(vp, K, v)
 #     @inbounds @simd for i in eachindex(a′)
 #         a′[i] = a′[i] + vp[i]
-#     end 
+#     end
 #     ## [TPL']
 #     A_mul_B!(KZp, T, P)
 #     A_mul_Bt!(KZ, KZp, L)
@@ -184,13 +180,13 @@ end
 #     ## [TPL'+RQR] -> P
 #     @inbounds @simd for i in eachindex(P′)
 #         P′[i] = KZ[i] + TM[i]
-#     end     
+#     end
 #     (a′, P′, v, C, Cinv)
 # end
 
 # ## diffuse filter version
 # ## F>0 and invertible
-# function filterstep!(a′, P′, v, vp, C, M, ZM, TM, K, KZ, KZp, L, a::AA, P::PP, Pinf, Pstar, Finf, Finfinv, Z, H, T, R, Q, y, ::Type{Val{1}}) where {AA, PP} 
+# function filterstep!(a′, P′, v, vp, C, M, ZM, TM, K, KZ, KZp, L, a::AA, P::PP, Pinf, Pstar, Finf, Finfinv, Z, H, T, R, Q, y, ::Type{Val{1}}) where {AA, PP}
 #     ## v  is (p x 1)
 #     ## v′ is (p x 1)
 #     ## C is (p x p)
@@ -206,15 +202,15 @@ end
 #     A_mul_B!(vp, Z, a)
 #     @inbounds @simd for i in eachindex(v)
 #         v[i] = y[i] - vp[i]
-#     end 
+#     end
 #     ## [M]
 #     A_mul_Bt!(M, Pstar, Z)
-#     ## [ZPZ'] -> ZM 
+#     ## [ZPZ'] -> ZM
 #     A_mul_B!(ZM, Z, M)
 #     # [ZPZ' + H] -> C (Fstar)
 #     @inbounds @simd for i in eachindex(ZM)
 #         C[i] = ZM[i] + H[i]
-#     end 
+#     end
 #     ## [T*M] -> TM
 #     A_mul_B!(TM, T, M)
 #     ## [T*M*Cinv] -> K (Kinf)
@@ -223,40 +219,40 @@ end
 #     A_mul_B!(KZ, K, C)
 #     @inbounds @simd for i in eachindex(Cinv)
 #         Cinv[i] = TM[i] + KZ[i]
-#     end 
+#     end
 #     A_mul_B!(ZM, Cinv, Finfinv)
 #     ## [KZ] -> KZ
 #     A_mul_B!(KZ, K, Z)
 #     ## [T-KZ] -> L
 #     @inbounds @simd for i in eachindex(L)
 #         L[i] = T[i] - KZ[i]
-#     end 
+#     end
 
 #     ## [T*a] -> Ta
 #     A_mul_B!(a′, T, a)
 #     A_mul_B!(vp, K, v)
 #     @inbounds @simd for i in eachindex(a′)
 #         a′[i] = a′[i] + vp[i]
-#     end 
+#     end
 #     ## [TPL']
 #     A_mul_B!(KZp, T, Pinf)
 #     A_mul_Bt!(KZ, KZp, L)  ## Pinf'
 #     ## [RQR]
 #     A_mul_B!(K, R, Q)
 #     A_mul_Bt!(TM, K, R)
-#     ## [TPstarL'+RQR] -> 
+#     ## [TPstarL'+RQR] ->
 #     A_mul_B!(KZp, T, Pstar)
 #     A_mul_Bt!(TPL, KZp, L)
 
 
 #     @inbounds @simd for i in eachindex(P′)
 #         P′[i] = KZ[i] + TPL[i] + TM[i] ## Pstar'
-#     end     
-    
+#     end
+
 #     (a′, P′, v, Fstar, Fstarinv, Kz, P′, 0)
 # end
 
-# function filterstep!(a′, P′, v, vp, C, M, ZM, TM, K, KZ, KZp, L, a::AA, P::PP, Pinf, Pstar, Finf, Finfinv, Z, H, T, R, Q, y, ::Type{Val{0}}) where {AA, PP} 
+# function filterstep!(a′, P′, v, vp, C, M, ZM, TM, K, KZ, KZp, L, a::AA, P::PP, Pinf, Pstar, Finf, Finfinv, Z, H, T, R, Q, y, ::Type{Val{0}}) where {AA, PP}
 #     ## v  is (p x 1)
 #     ## v′ is (p x 1)
 #     ## C is (p x p)
@@ -273,15 +269,15 @@ end
 #     A_mul_B!(vp, Z, a)
 #     @inbounds @simd for i in eachindex(v)
 #         v[i] = y[i] - vp[i]
-#     end 
+#     end
 #     ## [M]
 #     A_mul_Bt!(M, Pstar, Z)
-#     ## [ZPZ'] -> ZM 
+#     ## [ZPZ'] -> ZM
 #     A_mul_B!(ZM, Z, M)
 #     # [ZPZ' + H] -> C (Fstar)
 #     @inbounds @simd for i in eachindex(ZM)
 #         C[i] = ZM[i] + H[i]
-#     end 
+#     end
 #     Fstarinv = inv(factor(C))
 
 #     ## Kstar
@@ -298,22 +294,22 @@ end
 #     A_mul_B!(vp, K, v)
 #     @inbounds @simd for i in eachindex(a′)
 #         a′[i] = a′[i] + vp[i]
-#     end 
+#     end
 #     ## [TPL']
 #     A_mul_B!(KZp, T, Pinf)
 #     A_mul_Bt!(KZ, KZp, L)  ## Pinf'
 #     ## [RQR]
 #     A_mul_B!(K, R, Q)
 #     A_mul_Bt!(TM, K, R)
-#     ## [TPstarL'+RQR] -> 
+#     ## [TPstarL'+RQR] ->
 #     A_mul_B!(KZp, T, Pstar)
 #     A_mul_Bt!(TPL, KZp, L)
 
 
 #     @inbounds @simd for i in eachindex(P′)
 #         P′[i] = KZ[i] + TPL[i] + TM[i] ## Pstar'
-#     end     
-    
+#     end
+
 #     (a′, P′, v, Fstar, Fstarinv, Kz, P′, 0)
 # end
 
@@ -323,7 +319,21 @@ D. Storage
 -=#
 
 
-function storepush!(ss, a, P, v, F, F⁻¹, Pinf, Pstar, y, flag)
+function storepush!(ss, a::T, P, v, F, F⁻¹, Pinf, Pstar, y, flag) where T<:Real
+    push!(ss.f.a, a...)
+    push!(ss.f.P, P...)
+    push!(ss.c.F⁻¹, F⁻¹)
+    push!(ss.c.F, F)
+    push!(ss.c.Y, y)
+    push!(ss.f.Pinf, Pinf)
+    push!(ss.f.Pstar, Pstar)
+    ss.f.d[1] += 1
+    push!(ss.f.flagF, flag)
+    nothing
+end
+
+
+function storepush!(ss, a::T, P, v, F, F⁻¹, Pinf, Pstar, y, flag) where T<:AbstractArray
     push!(ss.f.a, a)
     push!(ss.f.P, P)
     push!(ss.c.F⁻¹, F⁻¹)
@@ -336,7 +346,17 @@ function storepush!(ss, a, P, v, F, F⁻¹, Pinf, Pstar, y, flag)
     nothing
 end
 
-function storepush!(ss, a, P, v, F, F⁻¹, y)
+
+function storepush!(ss, a::T, P, v, F, F⁻¹, y) where T<:Real
+    push!(ss.f.a, a...)
+    push!(ss.f.P, P...)
+    push!(ss.c.F⁻¹, F⁻¹)
+    push!(ss.c.F, F)
+    push!(ss.c.Y, y)
+    nothing
+end
+
+function storepush!(ss, a::T, P, v, F, F⁻¹, y) where T<:AbstractArray
     push!(ss.f.a, a)
     push!(ss.f.P, P)
     push!(ss.c.F⁻¹, F⁻¹)
@@ -359,16 +379,11 @@ function storeset!(ss, a, P, v, F, F⁻¹, Pinf, Pstar, y, offset, flag)
     nothing
 end
 
-function storeset!(ss, a, P, v, F, F⁻¹, y, offset)    
+function storeset!(ss, a, P, v, F, F⁻¹, y, offset)
     idx = ss.t[] + offset
-    @show idx
-    @show  F⁻¹
     ss.f.a[idx] = a
-    @show a
     ss.f.P[idx] = P
-    @show P
     ss.c.F⁻¹[idx] = F⁻¹
-    @show F⁻¹
     ss.c.F[idx] = F
     ss.c.Y[idx] = y
     # s = loglikpart(v, F, F⁻¹)
@@ -376,4 +391,3 @@ function storeset!(ss, a, P, v, F, F⁻¹, y, offset)
     # ss.loglik[1] += - p/2*log(2π) - s
     nothing
 end
-
