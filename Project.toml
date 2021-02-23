@@ -1,0 +1,13 @@
+name = "Filthy"
+uuid = "4bbcb006-69a8-46c4-bd0b-6b150ee03dfc"
+author = "Giuseppe Ragusa <giuseppe.ragusa@gmail.com>"
+version = "0.1.0"
+
+[deps]
+ForwardDiff = "f6369f11-7733-5829-9624-2563aa707210"
+GrowableArrays = "7ebbc34c-24a4-5a3f-b49a-24be4b3feaef"
+LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
+MathProgBase = "fdba3010-5040-5b88-9595-932c9decdf73"
+Parameters = "d96e819e-fc66-5662-9728-84c9c7592b0a"
+StaticArrays = "90137ffa-7385-5640-81b9-e52037218182"
+Statistics = "10745b16-79ce-11e8-11f9-7d13ad32a3b2"
