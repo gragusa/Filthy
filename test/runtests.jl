@@ -3,9 +3,10 @@ using Test
 using StaticArrays
 using BenchmarkTools
 using CSV
+
 #=
 Nile data
--==========================#
+==========================#
 
 nile = CSV.read("Nile.csv", allowmissing=:none)
 
@@ -181,7 +182,9 @@ end
 
 
 
+
 # Values from MLE (inexact, P = 1)
+
 Zn = fill(1.0, (1,1))
 Hn = fill(15098.654334841132368, (1,1))
 Rn = fill(1.0, (1,1))
